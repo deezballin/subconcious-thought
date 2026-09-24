@@ -1,0 +1,19 @@
+[Unit]
+Description=Undermind Ollama-compatible proxy (:11435)
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=undermind
+Group=undermind
+WorkingDirectory=/opt/undermind
+ExecStart=/opt/undermind/.venv/bin/python -m undermind.proxy
+Restart=on-failure
+RestartSec=3
+Environment=UNDERMIND_CONFIG=/opt/undermind/config.toml
+StandardOutput=append:/var/log/undermind-proxy.log
+StandardError=append:/var/log/undermind-proxy.log
+
+[Install]
+WantedBy=multi-user.target

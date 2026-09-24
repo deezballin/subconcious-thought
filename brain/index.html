@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Brain | Visual Knowledge Management</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="app">
+        <aside id="sidebar">
+            <header>
+                <h1>THE BRAIN</h1>
+                <div class="header-actions">
+                    <button class="btn-ghost" id="flight-toggle" title="Toggle 3D flight (F)">✈ 3D</button>
+                    <button class="btn-primary" id="add-node-btn">+</button>
+                </div>
+            </header>
+            <nav id="node-list">
+                <div class="search-container">
+                    <input type="text" placeholder="Search knowledge..." id="search-input">
+                </div>
+                <ul id="nodes">
+                    <!-- Dynamic nodes will appear here -->
+                </ul>
+            </nav>
+        </aside>
+        <main id="main-content">
+            <div id="graph-container">
+                <canvas id="graph-canvas"></canvas>
+            </div>
+            <div id="node-editor" class="glass-panel hidden">
+                <div class="editor-header">
+                    <input type="text" id="node-title" placeholder="Node Title">
+                    <button id="close-editor">&times;</button>
+                </div>
+                <textarea id="node-content" placeholder="Start typing..."></textarea>
+                <div class="editor-footer">
+                    <span id="save-status">Saved</span>
+                </div>
+            </div>
+        </main>
+    </div>
+    <script src="main.js"></script>
+</body>
+</html>

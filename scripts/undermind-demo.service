@@ -1,0 +1,25 @@
+[Unit]
+Description=Undermind sandbox demo autorun (demos + phone-home + status page)
+After=network-online.target ollama.service undermind-proxy.service
+Wants=network-online.target undermind-proxy.service
+
+[Service]
+Type=simple
+User=undermind
+Group=undermind
+WorkingDirectory=/opt/undermind
+ExecStart=/opt/undermind/scripts/sandbox_autorun.sh
+Restart=on-failure
+RestartSec=5
+Environment=UNDERMIND_HOME=/opt/undermind
+Environment=UNDERMIND_PROXY_HOST=127.0.0.1:11435
+Environment=UNDERMIND_STATUS_PORT=8080
+# Point this at your own endpoint to receive the JSON report at each phase:
+#Environment=UNDERMIND_REPORT_URL=https://your-endpoint.example/hook
+# Set to 1 to also run the live keystroke demo (needs xvfb + xdotool):
+#Environment=UNDERMIND_DEMO_KEYBOARD=1
+StandardOutput=append:/var/log/undermind-demo.log
+StandardError=append:/var/log/undermind-demo.log
+
+[Install]
+WantedBy=multi-user.target

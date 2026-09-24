@@ -1,0 +1,17 @@
+[project]
+name = "undermind"
+version = "0.2.0"
+description = "Universal inline prediction + fast handoff + daydreaming pipeline"
+authors = [{name = "Dewayne"}]
+requires-python = ">=3.11"
+dependencies = [
+    "pynput>=1.7.6",
+    "requests>=2.32.0",
+]
+
+[project.scripts]
+undermind = "undermind.main:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"

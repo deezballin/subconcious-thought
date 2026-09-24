@@ -1,0 +1,59 @@
+# Undermind configuration — copy to config.toml and adjust.
+# Every value below is the built-in default; omit sections to keep defaults.
+
+[draft]
+# Draft model that does inline sentence prediction. kind "openai_compat"
+# targets Lemonade Server (NPU-accelerated) and any OpenAI-compatible server;
+# kind "ollama" targets Ollama's native /api/generate endpoint.
+kind = "openai_compat"
+base_url = "http://localhost:13305"
+# Must be the exact model id reported by: GET http://localhost:13305/v1/models
+model = "Qwen3-8B-GGUF"
+api_key = ""
+temperature = 0.2
+max_tokens = 64
+# How long typing must pause before a prediction stream starts.
+debounce_s = 0.35
+timeout_s = 30.0
+# Minimum typed characters before predictions begin.
+min_buffer_chars = 4
+
+[confidence]
+# Fast-handoff trigger: exp(logprob) per token must reach this value.
+threshold = 0.95
+# "latest" = newest token's confidence; "ewma" = smoothed across tokens.
+mode = "latest"
+ewma_alpha = 0.4
+# Guards against firing on a trivial first token.
+min_tokens = 2
+min_chars = 8
+
+[primary]
+# The primary large LLM context pipeline that executes handed-off branches.
+# kinds: openai_compat | ollama | webhook | none
+kind = "openai_compat"
+base_url = "http://localhost:13305"
+model = "Qwen3-8B-GGUF"
+api_key = ""
+system_prompt = "You are the primary reasoning engine of a local assistant pipeline. Execute the handed-off text branch directly and respond concisely."
+# webhook only: the URL that receives {branch, context} JSON envelopes.
+webhook_url = ""
+timeout_s = 120.0
+retries = 1
+
+[daydream]
+# The daydream worker runs only after this much complete pipeline idle time.
+idle_threshold_s = 5.0
+# Intents need at least this many occurrences before they are exported.
+min_intent_count = 2
+export_path = "data/training_export.jsonl"
+poll_interval_s = 0.5
+max_samples_per_intent = 20
+
+[store]
+db_path = "data/undermind.db"
+
+[proxy]
+host = "127.0.0.1"
+port = 11435
+cache_ttl_s = 30.0
