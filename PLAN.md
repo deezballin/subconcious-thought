@@ -4,12 +4,12 @@
 > code and doc in sync. Runtime defaults live in `config.example.toml` (copy to
 > `config.toml` to override anything).
 
-## 0. Status (as of 2026-09-25)
+## 0. Status (as of 2026-09-26)
 
-**Implementation complete — 117 offline tests green (2026-09-25). Initial git
+**Implementation complete — 164 offline tests green (2026-09-26). Initial git
 commit made 2026-09-24 (root commit, everything above included).**
 (`uv run python -m unittest discover -s src/undermind -p "test_*.py"` →
-`OK (skipped=1)`; the skip is the live-backend integration test).
+`OK`.)
 
 Done:
 - Full pipeline in `src/undermind/` per the design below (config, confidence,
@@ -32,6 +32,26 @@ Done:
   (pixel-motion check) with `node --check` green.
 
 In flight:
+- **Bridge ops layer (2026-09-26):** (1) the doctor now reads the proxy's
+  serving mix — `/api/health` exposes the last 30 handoffs' served
+  provider/model/latency, attributed to the actual fallback-chain rung via
+  `FallbackProvider.last_served` — and reports **RIDING FALLBACK** (degraded)
+  when the 27B primary answered fewer than half of recent turns, plus a
+  "primary slow" note when median latency exceeds 60s. (2) Every doctor run
+  writes `data/doctor_status.json` (verdict + per-pipeline results, for
+  machines) and appends DEAD / RECOVERED transitions to
+  `data/doctor_alerts.log` (300s per-pipeline suppression, fail-open), and the
+  supervisor's 5-min tick runs the doctor too, so the Hermes dashboard can
+  surface outages without a manual run. The supervisor is a singleton now
+  (`Global\UndermindSupervisor` mutex — four duplicate old-code loops were
+  found and killed on 2026-09-26). (3) Near-duplicate intent mining: jaccard
+  similarity over word signatures merges buckets like "bridge smoke test" /
+  "bridge one smoke test" when `[daydream].merge_similarity` is above the
+  score (default 0.6; 0 disables), folding samples, counts and export
+  bookkeeping into the earlier intent; `dedupe_intent_samples()` runs each
+  cycle because merge flows re-link already-moved samples. Verified live: the
+  two stored bridge smoke-test intents merged into one count-3 bucket on the
+  next scheduler cycle.
 - **Hermes bridge DONE (2026-09-25, direct, no sandbox).** Proxy on :11435 now
   serves OpenAI-compatible `/v1/models` + `/v1/chat/completions` (JSON + SSE)
   alongside the Ollama routes, so Hermes providers speak it natively. Hermes

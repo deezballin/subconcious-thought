@@ -33,6 +33,7 @@ import re
 import socket
 import threading
 import time
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
@@ -280,8 +281,33 @@ class UndermindProxy(BaseHTTPRequestHandler):
                 "unprocessed_inputs": self.store.count_unprocessed(),
                 "intents": len(self.store.list_intents(min_count=1)),
                 "daydream": scheduler.status() if scheduler else None,
+                "serving": self._serving_summary(),
             }
         )
+
+    def _serving_summary(self) -> dict:
+        """Which engine has been answering, over the recent window."""
+        history = list(getattr(self, "recent_serving", []) or [])
+        if not history:
+            return {"recent_count": 0}
+        from collections import Counter
+
+        counts = Counter(h["model"] for h in history)
+        latencies = sorted(h["latency_ms"] for h in history)
+        mid = len(latencies) // 2
+        median_ms = (
+            latencies[mid]
+            if len(latencies) % 2
+            else (latencies[mid - 1] + latencies[mid]) / 2
+        )
+        primary_model = self.config.primary.model
+        return {
+            "recent_count": len(history),
+            "models": dict(counts),
+            "median_latency_ms": round(median_ms, 1),
+            "riding_fallback": primary_model not in counts
+            or counts[primary_model] < len(history) / 2,
+        }
 
     # ------------------------------------------------------------------
     # info endpoints
@@ -574,11 +600,24 @@ class UndermindProxy(BaseHTTPRequestHandler):
             branch, context=self.config.primary.system_prompt or None
         )
         latency_ms = (time.perf_counter_ns() - start_ns) / 1e6
+
+        # Attribute the response to the engine that actually served it.
+        served_index = 0
+        served_latency_ms: Optional[float] = None
+        fallback = getattr(self.primary, "last_served", None)
+        if fallback is not None:
+            served_index = int(fallback)
+            served_latency_ms = getattr(self.primary, "last_latency_ms", None)
+        served_provider, served_model = self._served_engine(served_index)
+        self._note_serving(
+            served_provider, served_model, served_latency_ms or latency_ms
+        )
+
         self.store.record_handoff(
             trigger="proxy_confidence_cross" if crossed else "proxy_direct",
             branch=branch,
-            provider=self.config.primary.kind,
-            model=self.config.primary.model,
+            provider=served_provider,
+            model=served_model,
             status="ok",
             confidence=confidence,
             latency_ms=latency_ms,
@@ -588,7 +627,45 @@ class UndermindProxy(BaseHTTPRequestHandler):
             "crossed": crossed,
             "confidence": confidence,
             "latency_ms": latency_ms,
+            "served_index": served_index,
+            "served_provider": served_provider,
+            "served_model": served_model,
+            "served_latency_ms": served_latency_ms,
         }
+
+    _KIND_BY_CLASS = {
+        "OllamaNativeProvider": "ollama",
+        "OpenAICompatProvider": "openai_compat",
+        "NoopProvider": "noop",
+    }
+
+    def _served_engine(self, served_index: int) -> tuple[str, str]:
+        """(kind, model) of the chain rung that actually answered."""
+        chain = getattr(self.primary, "providers", None)
+        if chain:
+            rung = chain[min(served_index, len(chain) - 1)]
+            cls_name = type(rung).__name__
+            kind = getattr(rung, "provider_kind", None) or self._KIND_BY_CLASS.get(
+                cls_name, cls_name
+            )
+            model = getattr(rung, "model", "") or self.config.primary.model
+            return str(kind), str(model)
+        return self.config.primary.kind, self.config.primary.model
+
+    def _note_serving(
+        self, provider: str, model: str, latency_ms: float
+    ) -> None:
+        """Keep a short history so /api/health can expose the serving mix."""
+        history = getattr(self, "recent_serving", None)
+        if history is not None:
+            history.append(
+                {
+                    "ts": time.time(),
+                    "provider": provider,
+                    "model": model,
+                    "latency_ms": round(latency_ms, 1),
+                }
+            )
 
     def _predict_with_confidence(self, prompt: str) -> ConfidenceTracker:
         """Stream a draft continuation, stopping at the threshold crossing."""
@@ -685,12 +762,14 @@ class ProxyServer:
             idle_threshold_s=self.config.daydream.idle_threshold_s,
             min_intent_count=self.config.daydream.min_intent_count,
             max_samples_per_intent=self.config.daydream.max_samples_per_intent,
+            merge_similarity=self.config.daydream.merge_similarity,
         )
         self.daydream_scheduler = DaydreamScheduler(
             worker=self.daydream,
             idle_threshold_s=self.config.daydream.idle_threshold_s,
             poll_interval_s=self.config.daydream.poll_interval_s,
         )
+        self.recent_serving: deque = deque(maxlen=30)
         self._server: Optional[ThreadingHTTPServer] = None
 
     def start(self) -> None:
@@ -744,6 +823,7 @@ class ProxyServer:
         _config = self.config
         _predictor = self.predictor
         _scheduler = self.daydream_scheduler
+        _recent_serving = self.recent_serving
 
         class ProxyHandler(UndermindProxy):
             cache = _cache
@@ -754,6 +834,7 @@ class ProxyServer:
             config = _config
             predictor = _predictor
             daydream_scheduler = _scheduler
+            recent_serving = _recent_serving
 
         return ProxyHandler
 

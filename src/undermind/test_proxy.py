@@ -349,5 +349,128 @@ class TestProxyOpenAIEndpoints(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 404)
 
 
+from collections import deque
+
+from undermind.providers.fallback import FallbackProvider
+from undermind.proxy import UndermindProxy
+
+
+class _Rung:
+    def __init__(self, tag, model):
+        self.tag = tag
+        self.model = model
+
+    def execute(self, branch, context=None):
+        return f"ok:{self.tag}"
+
+
+class _DeadRung:
+    model = "dead-rung"
+
+    def execute(self, branch, context=None):
+        raise ProviderError("rung down")
+
+
+class TestServedAttribution(unittest.TestCase):
+    """Serving must be credited to the chain rung that actually answered."""
+
+    ATTR_PORT = 11444
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self._running = []
+
+    def tearDown(self):
+        for httpd, server in self._running:
+            httpd.shutdown()
+            httpd.server_close()
+            try:
+                server.store.close()
+            except Exception:
+                pass
+        self.tmp.cleanup()
+
+    def _running_server(self, primary) -> ProxyServer:
+        from undermind.config import Config
+
+        config = Config()
+        config.store.db_path = os.path.join(self.tmp.name, "attr.db")
+        config.confidence.min_tokens = 1
+        config.confidence.min_chars = 0
+        server = ProxyServer(host=PROXY_HOST, port=self.ATTR_PORT, config=config)
+        server.draft_client = FakeDraftClient()
+        server.primary = primary  # captured by the handler factory below
+        httpd = ThreadingHTTPServer(
+            (PROXY_HOST, self.ATTR_PORT), server._handler_factory()
+        )
+        server._server = httpd
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self._running.append((httpd, server))
+        return server
+
+    def _generate(self, prompt="hello world") -> dict:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{self.ATTR_PORT}/api/generate",
+            data=json.dumps(
+                {"model": "undermind-bridge", "prompt": prompt, "stream": False}
+            ).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return json.loads(resp.read().decode())
+
+    def test_plain_primary_reports_config_engine(self):
+        server = self._running_server(FakePrimary())
+        self._generate()
+        self.assertEqual(
+            server.recent_serving[0]["model"], server.config.primary.model
+        )
+
+    def test_chain_primary_win_attributed(self):
+        chain = FallbackProvider(
+            [_Rung("p0", "bonsai-27b-1bit:latest"), _Rung("p1", "Bonsai-4B-Q1_0")]
+        )
+        server = self._running_server(chain)
+        self._generate()
+        self.assertEqual(chain.last_served, 0)
+        self.assertEqual(
+            server.recent_serving[0]["model"], "bonsai-27b-1bit:latest"
+        )
+
+    def test_chain_fallback_rung_attributed(self):
+        chain = FallbackProvider(
+            [_DeadRung(), _DeadRung(), _Rung("p2", "Bonsai-4B-Q1_0")]
+        )
+        server = self._running_server(chain)
+        self._generate()
+        self.assertEqual(chain.last_served, 2)
+        self.assertEqual(server.recent_serving[0]["model"], "Bonsai-4B-Q1_0")
+
+    def test_serving_summary_flags_riding_fallback(self):
+        from types import SimpleNamespace
+
+        from undermind.config import Config
+
+        history = deque(maxlen=30)
+        shim = SimpleNamespace(recent_serving=history, config=Config())
+        primary = shim.config.primary.model
+        fb = "Bonsai-4B-Q1_0"
+        for model, lat in ((fb, 100.0), (fb, 200.0), (fb, 300.0), (primary, 400.0)):
+            history.append(
+                {"ts": time.time(), "provider": "x", "model": model, "latency_ms": lat}
+            )
+        summary = UndermindProxy._serving_summary(shim)
+        self.assertEqual(summary["recent_count"], 4)
+        self.assertTrue(summary["riding_fallback"])
+        self.assertEqual(summary["median_latency_ms"], 250.0)
+
+        history.clear()
+        for model in (primary, primary, primary, fb):
+            history.append(
+                {"ts": time.time(), "provider": "x", "model": model, "latency_ms": 50.0}
+            )
+        self.assertFalse(UndermindProxy._serving_summary(shim)["riding_fallback"])
+
+
 if __name__ == "__main__":
     unittest.main()

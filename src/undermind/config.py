@@ -76,6 +76,9 @@ class DaydreamConfig:
     export_path: str = "data/training_export.jsonl"
     poll_interval_s: float = 0.5
     max_samples_per_intent: int = 20
+    # Near-duplicate intents whose word-set Jaccard similarity meets this
+    # threshold merge into one bucket (0 disables merging).
+    merge_similarity: float = 0.6
 
 
 @dataclass

@@ -127,5 +127,70 @@ class TestStore(unittest.TestCase):
         self.assertEqual(self.store.count_inputs(), 80)
 
 
+from undermind.intents import intent_id as compute_intent_id
+
+
+class TestStoreMerge(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = UndermindStore(os.path.join(self.tmp.name, "merge.db"))
+
+    def tearDown(self):
+        self.store.close()
+        self.tmp.cleanup()
+
+    def _seed(self, text):
+        input_id = self.store.record_input(text)
+        iid = compute_intent_id(text)
+        sig = " ".join(sorted(set(text.lower().split())))
+        self.store.upsert_intent(iid, sig)
+        self.store.add_intent_sample(iid, input_id)
+        self.store.record_input_id_intent(input_id, iid, sig)
+        return iid, input_id
+
+    def test_merge_moves_samples_and_sums_counts(self):
+        id_a, input_a = self._seed("alpha beta gamma")
+        id_b, input_b = self._seed("alpha beta delta")
+        count = self.store.merge_intent(id_b, id_a)
+        self.assertEqual(count, 2)
+        merged = self.store.get_intent(id_a)
+        self.assertEqual(merged["count"], 2)
+        self.assertIsNone(self.store.get_intent(id_b))
+        moved = self.store._conn.execute(
+            "SELECT input_id FROM intent_samples WHERE intent_id = ?", (id_a,)
+        ).fetchall()
+        self.assertEqual(sorted(r["input_id"] for r in moved), [input_a, input_b])
+        repointed = self.store._conn.execute(
+            "SELECT intent_id FROM inputs WHERE id = ?", (input_b,)
+        ).fetchone()
+        self.assertEqual(repointed["intent_id"], id_a)
+
+    def test_merge_keeps_first_seen_and_sums_export_bookkeeping(self):
+        id_a, _ = self._seed("alpha beta gamma")
+        id_b, _ = self._seed("alpha beta delta")
+        self.store._conn.execute(
+            "UPDATE intents SET exported_at_ms = 1000, export_count = 3"
+            " WHERE intent_id = ?",
+            (id_a,),
+        )
+        self.store._conn.execute(
+            "UPDATE intents SET exported_at_ms = 2000, export_count = 5"
+            " WHERE intent_id = ?",
+            (id_b,),
+        )
+        self.store._conn.commit()
+        self.store.merge_intent(id_b, id_a)
+        merged = self.store.get_intent(id_a)
+        self.assertEqual(merged["exported_at_ms"], 1000)
+        self.assertEqual(merged["export_count"], 8)
+
+    def test_merge_missing_rows_are_noops(self):
+        id_a, _ = self._seed("alpha beta gamma")
+        self.assertEqual(self.store.merge_intent(id_a, id_a), 1)
+        self.assertEqual(self.store.merge_intent("nope", id_a), 1)
+        self.assertEqual(self.store.merge_intent(id_a, "nope"), 0)
+        self.assertEqual(self.store.get_intent(id_a)["count"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -15,6 +15,7 @@ import time
 from typing import Callable, List, Optional
 
 from undermind.exporter import Exporter
+from undermind.intents import find_similar_intent
 from undermind.intents import intent_id as compute_intent_id
 from undermind.intents import signature as compute_signature
 from undermind.store import UndermindStore
@@ -57,6 +58,7 @@ class DaydreamWorker:
         poll_interval_s: float = 0.5,
         buffer_supplier: Optional[Callable[[], Optional[str]]] = None,
         on_cycle: Optional[Callable[[DaydreamResult], None]] = None,
+        merge_similarity: float = 0.0,
     ) -> None:
         self.store = store
         self.exporter = exporter
@@ -66,6 +68,7 @@ class DaydreamWorker:
         self.poll_interval_s = poll_interval_s
         self.buffer_supplier = buffer_supplier
         self.on_cycle = on_cycle
+        self.merge_similarity = merge_similarity
 
         self._idle_event = threading.Event()
         self._wake = threading.Event()
@@ -176,13 +179,27 @@ class DaydreamWorker:
             sig = compute_signature(text)
             iid = compute_intent_id(text)
             self.store.upsert_intent(iid, sig)
-            self.store.add_intent_sample(iid, row["id"])
-            self.store.record_input_id_intent(row["id"], iid, sig)
+            target_id = iid
+            if self.merge_similarity > 0:
+                # Refreshed per input so same-batch near-duplicates merge too.
+                candidates = [
+                    (r["intent_id"], r["signature"])
+                    for r in self.store.list_intents(min_count=1)
+                    if r["intent_id"] != iid
+                ]
+                similar = find_similar_intent(sig, candidates, self.merge_similarity)
+                if similar is not None:
+                    self.store.merge_intent(iid, similar)
+                    target_id = similar
+            self.store.add_intent_sample(target_id, row["id"])
+            self.store.record_input_id_intent(row["id"], target_id, sig)
             processed_ids.append(row["id"])
-            if iid not in updated_ids:
-                updated_ids.append(iid)
+            if target_id not in updated_ids:
+                updated_ids.append(target_id)
 
         self.store.mark_processed(processed_ids)
+        # Merge flows re-link samples that were already moved; drop dupes.
+        self.store.dedupe_intent_samples()
 
         records = self.exporter.export_pending(
             self.min_intent_count, self.max_samples_per_intent

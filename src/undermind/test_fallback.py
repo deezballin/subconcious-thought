@@ -111,5 +111,42 @@ class BuildPrimaryChainTests(unittest.TestCase):
         self.assertEqual(fb.kind, "ollama")
 
 
+from undermind.providers.fallback import FallbackProvider
+
+
+class _Ok:
+    def __init__(self, tag=""):
+        self.tag = tag
+
+    def execute(self, branch, context=None):
+        return f"ok:{self.tag}"
+
+
+class _Boom:
+    def execute(self, branch, context=None):
+        raise ProviderError("down")
+
+
+class TestServedAttribution(unittest.TestCase):
+    def test_last_served_primary(self):
+        chain = FallbackProvider([_Ok("p1"), _Ok("p2")])
+        self.assertEqual(chain.execute("x"), "ok:p1")
+        self.assertEqual(chain.last_served, 0)
+        self.assertIsNotNone(chain.last_latency_ms)
+
+    def test_last_served_fallback(self):
+        chain = FallbackProvider([_Boom(), _Ok("p2")])
+        self.assertEqual(chain.execute("x"), "ok:p2")
+        self.assertEqual(chain.last_served, 1)
+        self.assertIsNotNone(chain.last_latency_ms)
+
+    def test_last_served_none_on_total_failure(self):
+        chain = FallbackProvider([_Boom(), _Boom()])
+        with self.assertRaises(ProviderError):
+            chain.execute("x")
+        self.assertIsNone(chain.last_served)
+        self.assertIsNone(chain.last_latency_ms)
+
+
 if __name__ == "__main__":
     unittest.main()

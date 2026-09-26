@@ -14,6 +14,7 @@ import time
 import unittest
 import urllib.request
 from contextlib import redirect_stdout
+from pathlib import Path
 from http.server import ThreadingHTTPServer
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -288,6 +289,132 @@ class TestDoctorChecks(unittest.TestCase):
             doctor.CHECKS = original
         self.assertEqual(code, 0)  # degraded, not dead
         self.assertIn("degraded", buffer.getvalue())
+
+
+class TestDoctorAlerting(unittest.TestCase):
+    """Status file + alert log + serving-mix awareness."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.config = Config()
+        self.config.store.db_path = os.path.join(self.tmp.name, "alert.db")
+
+    def tearDown(self):
+        doctor._alert_state.clear()
+        self.tmp.cleanup()
+
+    @staticmethod
+    def _results(*statuses):
+        return [
+            {"name": f"pipe{i}", "status": s, "detail": f"{s} detail"}
+            for i, s in enumerate(statuses)
+        ]
+
+    def test_status_file_written_and_verdicts(self):
+        doctor._write_status_file(
+            self.config, self._results("up", "up"), []
+        )
+        payload = json.loads(
+            (Path(self.tmp.name) / "doctor_status.json").read_text()
+        )
+        self.assertEqual(payload["verdict"], "up")
+        self.assertEqual(payload["dead"], [])
+
+        doctor._write_status_file(
+            self.config, self._results("up", "dead"), ["pipe1"]
+        )
+        payload = json.loads(
+            (Path(self.tmp.name) / "doctor_status.json").read_text()
+        )
+        self.assertEqual(payload["verdict"], "dead")
+        self.assertEqual(payload["dead"], ["pipe1"])
+
+    def test_alert_log_records_dead_then_recovers(self):
+        doctor._write_alerts(self.config, self._results("dead"), ["pipe0"])
+        log = (Path(self.tmp.name) / "doctor_alerts.log").read_text()
+        self.assertIn("DEAD pipe0", log)
+
+        doctor._write_alerts(self.config, self._results("up"), [])
+        log = (Path(self.tmp.name) / "doctor_alerts.log").read_text()
+        self.assertIn("RECOVERED pipe0", log)
+
+    def test_dead_alerts_suppressed_within_window(self):
+        doctor._write_alerts(self.config, self._results("dead"), ["pipe0"])
+        doctor._write_alerts(self.config, self._results("dead"), ["pipe0"])
+        log = (Path(self.tmp.name) / "doctor_alerts.log").read_text()
+        self.assertEqual(log.count("DEAD pipe0"), 1)
+
+    def test_alert_writers_fail_open(self):
+        # Unwritable directory must not raise.
+        self.config.store.db_path = os.path.join(
+            self.tmp.name, "no", "such", "dir", "x.db"
+        )
+        doctor._write_status_file(self.config, self._results("up"), [])
+        doctor._write_alerts(self.config, self._results("up"), [])
+
+    def test_undermind_check_riding_fallback_degraded(self):
+        health = {
+            "ok": True,
+            "version": "9.9.9",
+            "cache_entries": 0,
+            "inputs": 1,
+            "unprocessed_inputs": 0,
+            "daydream": {"running": False, "cycles_run": 0},
+            "serving": {
+                "recent_count": 4,
+                "models": {"Bonsai-4B-Q1_0": 3, "bonsai-27b-1bit:latest": 1},
+                "median_latency_ms": 400.0,
+                "riding_fallback": True,
+            },
+        }
+        original = doctor._http_json
+        doctor._http_json = lambda url, timeout=3.0: (200, health)
+        try:
+            result = doctor.check_undermind(self.config)
+        finally:
+            doctor._http_json = original
+        self.assertEqual(result["status"], "degraded")
+        self.assertIn("RIDING FALLBACK", result["detail"])
+
+    def test_undermind_check_primary_slow_but_up(self):
+        health = {
+            "ok": True,
+            "version": "9.9.9",
+            "cache_entries": 0,
+            "inputs": 1,
+            "unprocessed_inputs": 0,
+            "daydream": {"running": False, "cycles_run": 0},
+            "serving": {
+                "recent_count": 2,
+                "models": {"bonsai-27b-1bit:latest": 2},
+                "median_latency_ms": float(doctor.PRIMARY_SLOW_MS) + 1,
+                "riding_fallback": False,
+            },
+        }
+        original = doctor._http_json
+        doctor._http_json = lambda url, timeout=3.0: (200, health)
+        try:
+            result = doctor.check_undermind(self.config)
+        finally:
+            doctor._http_json = original
+        self.assertEqual(result["status"], "up")
+        self.assertIn("primary slow", result["detail"])
+
+    def test_run_doctor_writes_status_file(self):
+        original = doctor.CHECKS
+        doctor.CHECKS = (
+            lambda config: {"name": "pipe0", "status": "up", "detail": "ok"},
+        )
+        buffer = io.StringIO()
+        try:
+            with redirect_stdout(buffer):
+                code = doctor.run_doctor(self.config)
+        finally:
+            doctor.CHECKS = original
+        self.assertEqual(code, 0)
+        self.assertTrue(
+            (Path(self.tmp.name) / "doctor_status.json").exists()
+        )
 
 
 class TestWatchdogGuard(unittest.TestCase):

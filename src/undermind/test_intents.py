@@ -83,5 +83,41 @@ class TestGrouping(unittest.TestCase):
         self.assertFalse(is_repeat("delete the database", seen))
 
 
+from undermind.intents import find_similar_intent, jaccard_similarity
+
+
+class TestSimilarity(unittest.TestCase):
+    def test_identical_signatures_score_one(self):
+        self.assertAlmostEqual(
+            jaccard_similarity("bridge smoke test", "bridge smoke test"), 1.0
+        )
+
+    def test_near_duplicate_scores_above_threshold(self):
+        # "one" is the only differing word: 3 shared / 4 union = 0.75.
+        score = jaccard_similarity("bridge one smoke test", "bridge smoke test")
+        self.assertGreater(score, 0.6)
+        self.assertLess(score, 1.0)
+
+    def test_disjoint_scores_zero(self):
+        self.assertEqual(jaccard_similarity("bug fix login", "bridge smoke test"), 0.0)
+
+    def test_empty_signature_scores_zero(self):
+        self.assertEqual(jaccard_similarity("", "bridge smoke test"), 0.0)
+
+    def test_find_similar_intent_picks_best(self):
+        existing = [("aaa", "bridge smoke test"), ("bbb", "bug fix login")]
+        self.assertEqual(
+            find_similar_intent("bridge one smoke test", existing, 0.6), "aaa"
+        )
+
+    def test_find_similar_intent_none_below_threshold(self):
+        existing = [("aaa", "bug fix login")]
+        self.assertIsNone(find_similar_intent("bridge smoke test", existing, 0.6))
+
+    def test_find_similar_intent_disabled_at_zero(self):
+        existing = [("aaa", "bridge smoke test")]
+        self.assertIsNone(find_similar_intent("bridge smoke test", existing, 0.0))
+
+
 if __name__ == "__main__":
     unittest.main()

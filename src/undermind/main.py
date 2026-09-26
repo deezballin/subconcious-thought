@@ -102,6 +102,7 @@ class Pipeline:
             min_intent_count=config.daydream.min_intent_count,
             max_samples_per_intent=config.daydream.max_samples_per_intent,
             poll_interval_s=config.daydream.poll_interval_s,
+            merge_similarity=config.daydream.merge_similarity,
             buffer_supplier=self.listener_buffer,
             on_cycle=self._on_daydream_cycle,
         )
@@ -311,6 +312,7 @@ def main(argv: list[str] | None = None) -> int:
             idle_threshold_s=config.daydream.idle_threshold_s,
             min_intent_count=config.daydream.min_intent_count,
             max_samples_per_intent=config.daydream.max_samples_per_intent,
+            merge_similarity=config.daydream.merge_similarity,
         )
         worker.force_idle()
         result = worker.run_cycle()

@@ -196,6 +196,75 @@ class UndermindStore:
             )
             self._conn.commit()
 
+    def dedupe_intent_samples(self) -> int:
+        """Remove duplicate (intent_id, input_id) sample rows; returns removed.
+
+        Merge flows re-link samples that were already moved, so the
+        (intent_id, input_id) pair can repeat; the miner only needs one.
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM intent_samples WHERE id NOT IN ("
+                "  SELECT MIN(id) FROM intent_samples"
+                "  GROUP BY intent_id, input_id)"
+            )
+            self._conn.commit()
+            return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+
+    def merge_intent(self, source_id: str, target_id: str) -> int:
+        """Fold source intent into target; returns the target's new count.
+
+        Moves intent_samples and inputs references over, sums counts,
+        keeps the earlier first_seen and later last_seen, unions export
+        bookkeeping, then deletes the source row. Self-merges and missing
+        rows are no-ops.
+        """
+        with self._lock:
+            source = self._conn.execute(
+                "SELECT * FROM intents WHERE intent_id = ?", (source_id,)
+            ).fetchone()
+            target = self._conn.execute(
+                "SELECT * FROM intents WHERE intent_id = ?", (target_id,)
+            ).fetchone()
+            if source is None or target is None or source_id == target_id:
+                return int(target["count"]) if target is not None else 0
+
+            self._conn.execute(
+                "UPDATE intent_samples SET intent_id = ? WHERE intent_id = ?",
+                (target_id, source_id),
+            )
+            self._conn.execute(
+                "UPDATE inputs SET intent_id = ? WHERE intent_id = ?",
+                (target_id, source_id),
+            )
+
+            exported_values = [
+                int(v)
+                for v in (target["exported_at_ms"], source["exported_at_ms"])
+                if v is not None
+            ]
+            self._conn.execute(
+                "UPDATE intents SET count = ?, first_seen_ms = ?,"
+                " last_seen_ms = ?, exported_at_ms = ?, export_count = ?"
+                " WHERE intent_id = ?",
+                (
+                    int(target["count"]) + int(source["count"]),
+                    min(int(target["first_seen_ms"]), int(source["first_seen_ms"])),
+                    max(int(target["last_seen_ms"]), int(source["last_seen_ms"])),
+                    min(exported_values) if exported_values else None,
+                    int(target["export_count"]) + int(source["export_count"]),
+                    target_id,
+                ),
+            )
+            self._conn.execute(
+                "DELETE FROM intents WHERE intent_id = ?", (source_id,)
+            )
+            self._conn.commit()
+            row = self._conn.execute(
+                "SELECT count FROM intents WHERE intent_id = ?", (target_id,)
+            ).fetchone()
+            return int(row["count"])
+
     def get_intent(self, intent_id: str) -> Optional[sqlite3.Row]:
         with self._lock:
             return self._conn.execute(

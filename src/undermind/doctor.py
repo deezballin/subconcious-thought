@@ -22,6 +22,8 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import time
+from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
@@ -30,6 +32,19 @@ from undermind.config import Config
 
 OMNIROUTE_URL = "http://127.0.0.1:20128"
 HERMES_GATEWAY_PORT = 8000
+
+# Files the doctor maintains for machines and the supervisor (repo-relative
+# unless made absolute elsewhere). The status file is the current census;
+# the alert log appends one line per newly-dead pipeline (suppressed per
+# pipeline for SUPPRESS_S so a steady state does not spam).
+STATUS_FILE = "data/doctor_status.json"
+ALERT_LOG = "data/doctor_alerts.log"
+_DEAD_ALERT_SUPPRESS_S = 300.0
+_alert_state: dict[str, float] = {}
+
+# A median serving latency above this on the primary means the bridge is
+# effectively limping; surfaced in the Undermind check's detail.
+PRIMARY_SLOW_MS = 60_000.0
 
 _PS_HERMES_CENSUS = (
     "Get-CimInstance Win32_Process | "
@@ -159,6 +174,23 @@ def check_undermind(config: Config) -> dict:
         f"({data.get('unprocessed_inputs', 0)} unprocessed), "
         f"{mining}, cycles {daydream.get('cycles_run', 0)}"
     )
+
+    # Serving mix: is the bridge riding the fallback rung, or limping?
+    serving = data.get("serving") or {}
+    if serving.get("recent_count"):
+        models = serving.get("models") or {}
+        median_ms = serving.get("median_latency_ms") or 0
+        mix = ", ".join(f"{m} x{n}" for m, n in models.items())
+        detail += f"; serving: {mix}, median {median_ms / 1000:.1f}s"
+        if serving.get("riding_fallback"):
+            return {
+                "name": "Undermind",
+                "status": "degraded",
+                "detail": detail
+                + " - RIDING FALLBACK (primary not answering most turns)",
+            }
+        if median_ms > PRIMARY_SLOW_MS:
+            detail += f" - primary slow (median > {PRIMARY_SLOW_MS / 1000:.0f}s)"
     return {"name": "Undermind", "status": "up", "detail": detail}
 
 
@@ -226,8 +258,69 @@ CHECKS = (check_ollama, check_lemonade, check_undermind, check_omniroute, check_
 # runner
 # ----------------------------------------------------------------------
 
+def _status_dir(config: Config):
+    """Directory for the status file / alert log (next to the SQLite db)."""
+    return Path(config.store.db_path).expanduser().resolve().parent
+
+
+def _write_status_file(config: Config, results: list, dead: list) -> None:
+    """Persist the current census for machines (health panels, watchdogs)."""
+    try:
+        directory = _status_dir(config)
+        directory.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "version": __version__,
+            "verdict": "dead" if dead else "up",
+            "dead": dead,
+            "results": results,
+        }
+        (directory / Path(STATUS_FILE).name).write_text(
+            json.dumps(payload, indent=2), encoding="utf-8"
+        )
+    except Exception:
+        pass  # fail-open: reporting must never crash the doctor
+
+
+def _write_alerts(config: Config, results: list, dead: list) -> None:
+    """Append DEAD / RECOVERED transitions to the alert log.
+
+    A pipeline already recorded dead within SUPPRESS_S does not re-alert,
+    so a supervisor ticking every few minutes does not spam the log.
+    """
+    if not dead and not _alert_state:
+        return
+    try:
+        directory = _status_dir(config)
+        directory.mkdir(parents=True, exist_ok=True)
+        log_path = directory / Path(ALERT_LOG).name
+        now = time.monotonic()
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+        details = {r["name"]: r["detail"] for r in results}
+        lines = []
+        for name in dead:
+            if now - _alert_state.get(name, 0.0) < _DEAD_ALERT_SUPPRESS_S:
+                continue
+            _alert_state[name] = now
+            lines.append(f"{stamp} DEAD {name}: {details.get(name, '')}")
+        for name in list(_alert_state):
+            if name not in dead:
+                lines.append(f"{stamp} RECOVERED {name}")
+                del _alert_state[name]
+        if lines:
+            with open(log_path, "a", encoding="utf-8") as fh:
+                fh.write("\n".join(lines) + "\n")
+    except Exception:
+        pass  # fail-open
+
+
 def run_doctor(config: Config, as_json: bool = False) -> int:
-    """Run all checks; print a report; return 0 iff nothing is dead."""
+    """Run all checks; print a report; return 0 iff nothing is dead.
+
+    Every run also refreshes the machine-readable status file and appends
+    any new DEAD / RECOVERED transitions to the alert log, so a supervisor
+    or dashboard can surface outages without a human running this.
+    """
     results = []
     for check in CHECKS:
         try:
@@ -241,6 +334,13 @@ def run_doctor(config: Config, as_json: bool = False) -> int:
                 }
             )
 
+    dead = [r["name"] for r in results if r["status"] == "dead"]
+    degraded = [r["name"] for r in results if r["status"] == "degraded"]
+    orphaned = [r["name"] for r in results if r["status"] == "orphaned"]
+
+    _write_status_file(config, results, dead)
+    _write_alerts(config, results, dead)
+
     if as_json:
         print(json.dumps({"results": results}, indent=2))
     else:
@@ -251,20 +351,17 @@ def run_doctor(config: Config, as_json: bool = False) -> int:
             print(f"  {r['name']:<{width}}  [{r['status']:>8}]  {r['detail']}")
         print("-" * 72)
 
-    dead = [r["name"] for r in results if r["status"] == "dead"]
-    degraded = [r["name"] for r in results if r["status"] == "degraded"]
-    orphaned = [r["name"] for r in results if r["status"] == "orphaned"]
     if as_json:
         return 1 if dead else 0
     if dead:
-        print(f"verdict: DEAD — {', '.join(dead)} (exit 1)")
+        print(f"verdict: DEAD - {', '.join(dead)} (exit 1)")
     elif degraded or orphaned:
         bits = []
         if degraded:
             bits.append(f"degraded: {', '.join(degraded)}")
         if orphaned:
             bits.append(f"orphaned: {', '.join(orphaned)}")
-        print(f"verdict: UP with issues — {'; '.join(bits)} (exit 0)")
+        print(f"verdict: UP with issues - {'; '.join(bits)} (exit 0)")
     else:
         print("verdict: ALL UP (exit 0)")
     return 1 if dead else 0

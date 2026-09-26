@@ -19,7 +19,13 @@ logger = logging.getLogger(__name__)
 
 
 class FallbackProvider:
-    """Execute on the first provider in the chain that answers."""
+    """Execute on the first provider in the chain that answers.
+
+    After each ``execute``, ``last_served`` (index of the provider that
+    answered, or None) and ``last_latency_ms`` describe what actually
+    happened, so callers can attribute the response and notice when the
+    chain is riding a fallback rung instead of the primary.
+    """
 
     def __init__(
         self,
@@ -30,12 +36,20 @@ class FallbackProvider:
             raise ProviderError("FallbackProvider needs at least one provider")
         self.providers = providers
         self.per_provider_timeout_s = per_provider_timeout_s
+        self.last_served: Optional[int] = None
+        self.last_latency_ms: Optional[float] = None
 
     def execute(self, branch: str, context: str | None = None) -> str:
         last_exc: Optional[Exception] = None
+        self.last_served = None
+        self.last_latency_ms = None
         for index, provider in enumerate(self.providers):
+            start_ns = time.perf_counter_ns()
             try:
-                return provider.execute(branch, context=context)
+                result = provider.execute(branch, context=context)
+                self.last_served = index
+                self.last_latency_ms = (time.perf_counter_ns() - start_ns) / 1e6
+                return result
             except Exception as exc:  # fail-open: any failure moves down the chain
                 last_exc = exc
                 logger.warning(

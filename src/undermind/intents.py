@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import re
 import unicodedata
+from typing import Iterable, Optional
 
 STOPWORDS = frozenset(
     """
@@ -85,6 +86,45 @@ def content_words(text: str) -> list[str]:
 def signature(text: str) -> str:
     """The canonical space-joined signature for a piece of input text."""
     return " ".join(content_words(text))
+
+
+def jaccard_similarity(sig_a: str, sig_b: str) -> float:
+    """Word-set Jaccard similarity between two intent signatures (0..1).
+
+    Signatures are already stopword-free stems joined by spaces, so plain
+    set arithmetic is the right measure. Identical sets -> 1.0; disjoint
+    -> 0.0. An empty signature on either side yields 0.0 (no evidence).
+    """
+    words_a = set(sig_a.split())
+    words_b = set(sig_b.split())
+    if not words_a or not words_b:
+        return 0.0
+    union = words_a | words_b
+    return len(words_a & words_b) / len(union)
+
+
+def find_similar_intent(
+    signature: str,
+    existing: Iterable[tuple[str, str]],
+    threshold: float = 0.6,
+) -> Optional[str]:
+    """Return the intent_id of the most similar existing intent, or None.
+
+    ``existing`` is an iterable of (intent_id, signature) pairs — typically
+    all rows of the intents table. When several clear the threshold, the
+    highest similarity wins; ties break toward the earliest row listed.
+    A threshold <= 0 disables the search (always None).
+    """
+    if threshold <= 0:
+        return None
+    best_id: Optional[str] = None
+    best_score = threshold
+    for other_id, other_signature in existing:
+        score = jaccard_similarity(signature, other_signature)
+        if score > best_score:
+            best_score = score
+            best_id = other_id
+    return best_id
 
 
 def intent_id(text: str) -> str:
