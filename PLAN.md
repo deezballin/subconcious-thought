@@ -43,8 +43,14 @@ In flight:
   live: Hermes turn recorded → daydream mined → `/api/intents` → hook
   re-injects the signature. End-to-end `-z` turn through the flipped config
   succeeded (uncached ~2 min on the thinking-style 27B; cached hits instant).
-  Tuning item: the intent signature miner over-generalizes — fresh inputs merge
-  into existing buckets ("bug fix login" absorbed an unrelated turn).
+  CORRECTION (2026-09-25): the earlier "miner over-generalizes" note was wrong —
+  store evidence shows that count bump was a leftover input from the prior day,
+  and the turn that looked "absorbed" was a genuine paraphrase of the same
+  intent. The real defect was the bridge plugin sitting DISABLED in Hermes'
+  activation ledger (`hermes plugins enable undermind` fixed it; stub-ctx
+  verification bypasses that gate — always cross-check `hermes plugins list`).
+  Live loop now proven end-to-end: turn recorded (inputs id 8) → mined →
+  "bug fix login" count 6 → eligible for injection on the next turn.
 - **Model hygiene rule (learned 2026-09-24):** artifacts of the abliteration
   work — e.g. the `qwen3.8-9b-distill-uncensored-heretic` gguf — are **reading
   material, not serving models**. Never wire them into a config as a working
@@ -52,7 +58,13 @@ In flight:
   (including node 5's inventory). Working stable: the Bonsai line (his own —
   27b-1bit on Ollama, 1.7B/4B Q1_0 on the NPU), `pupukachoo` (working small
   model), `qwen2.5:0.5b` (utility/SLM). Verify with Dewayne before seating any
-  model.
+  model. **Purge complete (2026-09-25):** all heretic/abliterated references
+  removed from live Hermes `config.yaml` — both lemonade/27b default_models,
+  fallback rung 1, `auxiliary.vision.model`, the ollama-launch list,
+  persistent-cache, and the legacy custom_providers cache — and replaced with
+  verified serving models (Lemonade `/v1/models` ground truth: only
+  Bonsai-1.7B-Q1_0, Bonsai-4B-Q1_0, smol_llama-101m-gqa.q2_k serve there).
+  Backups: `config.yaml.bak-pre-undermind`, `config.yaml.bak-pre-heretic-fix`.
 - VM/ISO sandbox track: **parked** (2026-09-24) after three installer
   generations fought back. Lessons preserved in docs/VM_CHECKLIST.md (netboot
   is a downloader; corrupt 26.04.1 mini iso — tail zeros; the npu-folder
