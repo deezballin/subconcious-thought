@@ -35,11 +35,15 @@ class OpenAICompatProvider:
         model: str,
         api_key: str = "",
         timeout_s: float = 30.0,
+        stall_timeout_s: float = 0.0,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
         self.timeout_s = timeout_s
+        # Max silent gap between streamed tokens during execute(); bounds a
+        # hung engine without cutting off long thinking turns. 0 = disabled.
+        self.stall_timeout_s = stall_timeout_s
 
     # ------------------------------------------------------------------
     # DraftClient
@@ -180,28 +184,73 @@ class OpenAICompatProvider:
     # ------------------------------------------------------------------
 
     def execute(self, branch: str, context: str | None = None) -> str:
-        """Run the branch as a chat completion and return the result text."""
+        """Run the branch as a chat completion and return the result text.
+
+        Streams internally so the socket read timeout bounds the silent gap
+        between tokens (stall_timeout_s) instead of the whole completion —
+        a thinking model that pauses mid-reasoning is safe, a wedged engine
+        trips the stall timeout quickly. With stall detection disabled this
+        is a plain non-streaming request capped by timeout_s.
+        """
         messages = []
         if context:
             messages.append({"role": "system", "content": context})
         messages.append({"role": "user", "content": branch})
+        if not self.stall_timeout_s or self.stall_timeout_s <= 0:
+            payload = {"model": self.model, "messages": messages, "stream": False}
+            try:
+                response = requests.post(
+                    f"{self.base_url}{CHAT_COMPLETIONS_PATH}",
+                    json=payload,
+                    headers=_headers(self.api_key),
+                    timeout=self.timeout_s,
+                )
+                response.raise_for_status()
+            except requests.RequestException as exc:
+                raise ProviderError(f"Primary execution failed: {exc}") from exc
+            data = response.json()
+            choices = data.get("choices") or []
+            if not choices:
+                raise ProviderError(f"{self.base_url} returned no choices")
+            return (choices[0].get("message") or {}).get("content") or ""
+
         payload = {
             "model": self.model,
             "messages": messages,
-            "stream": False,
+            "stream": True,
+            "logprobs": True,
         }
+        collected: list[str] = []
         try:
-            response = requests.post(
+            with requests.post(
                 f"{self.base_url}{CHAT_COMPLETIONS_PATH}",
                 json=payload,
                 headers=_headers(self.api_key),
-                timeout=self.timeout_s,
-            )
-            response.raise_for_status()
+                stream=True,
+                timeout=(10.0, self.stall_timeout_s),
+            ) as response:
+                if response.status_code != 200:
+                    body = response.text[:300]
+                    raise ProviderError(
+                        f"{self.base_url} returned {response.status_code}: {body}"
+                    )
+                for raw_line in response.iter_lines():
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data = line[len("data:"):].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except ValueError:
+                        continue
+                    choices = chunk.get("choices") or []
+                    if not choices:
+                        continue
+                    token_text = (choices[0].get("delta") or {}).get("content") or ""
+                    if token_text:
+                        collected.append(token_text)
         except requests.RequestException as exc:
             raise ProviderError(f"Primary execution failed: {exc}") from exc
-        data = response.json()
-        choices = data.get("choices") or []
-        if not choices:
-            raise ProviderError(f"{self.base_url} returned no choices")
-        return (choices[0].get("message") or {}).get("content") or ""
+        return "".join(collected)

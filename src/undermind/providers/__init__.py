@@ -59,18 +59,21 @@ def build_primary_provider(config: Config) -> PrimaryProvider:
     """Create the primary pipeline from [primary] settings."""
     primary: PrimaryConfig = config.primary
     kind = primary.kind.strip().lower()
+    stall = float(getattr(primary, "stall_timeout_s", 0) or 0)
     if kind == "openai_compat":
         return OpenAICompatProvider(
             base_url=primary.base_url,
             model=primary.model,
             api_key=primary.api_key,
             timeout_s=primary.timeout_s,
+            stall_timeout_s=stall,
         )
     if kind == "ollama":
         return OllamaNativeProvider(
             base_url=primary.base_url,
             model=primary.model,
             timeout_s=primary.timeout_s,
+            stall_timeout_s=stall,
         )
     if kind == "webhook":
         return WebhookProvider(

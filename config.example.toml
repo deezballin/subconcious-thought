@@ -40,6 +40,14 @@ system_prompt = "You are the primary reasoning engine of a local assistant pipel
 webhook_url = ""
 timeout_s = 120.0
 retries = 1
+# Wall-clock cap for the fallback rung of the fail-open chain (the primary
+# rung is capped at timeout_s). A rung exceeding its cap is abandoned and the
+# chain fails over instead of stalling the turn.
+fallback_timeout_s = 60.0
+# Max silent gap (seconds) allowed while a rung streams its answer: bounds a
+# hung engine without cutting off long thinking turns (tokens keep flowing).
+# 0 disables stall detection. Fallback rungs default to 30s when unset.
+stall_timeout_s = 90.0
 
 [daydream]
 # The daydream worker runs only after this much complete pipeline idle time.

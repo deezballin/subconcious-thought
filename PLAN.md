@@ -49,9 +49,18 @@ In flight:
   "bridge one smoke test" when `[daydream].merge_similarity` is above the
   score (default 0.6; 0 disables), folding samples, counts and export
   bookkeeping into the earlier intent; `dedupe_intent_samples()` runs each
-  cycle because merge flows re-link already-moved samples. Verified live: the
-  two stored bridge smoke-test intents merged into one count-3 bucket on the
-  next scheduler cycle.
+  cycle because merge flows re-link already-moved samples. Verified live:the two stored bridge smoke-test intents merged into one count-3 bucket on the
+next scheduler cycle. (4) Real per-rung timeouts in the fallback chain: each
+rung has a wall-clock cap (`[primary].timeout_s` for the 27B rung,
+`[primary].fallback_timeout_s` for the fallback rungs — default 60s) enforced
+on a daemon worker thread, so a wedged rung is abandoned and the chain fails
+over instead of stalling the turn; a rung exceeding its cap is left to its own
+socket timeouts (never blocks process exit). Because a thinking 27B cannot be
+distinguished from a hung one while silent, the primary execute path now
+streams internally and `stall_timeout_s` (default 90s) bounds only the silent
+gap between tokens — long thinking turns keep emitting and are never cut.
+14 new tests cover cap semantics, real-socket stall servers for both engines,
+and config wiring; 178 green.
 - **Hermes bridge DONE (2026-09-25, direct, no sandbox).** Proxy on :11435 now
   serves OpenAI-compatible `/v1/models` + `/v1/chat/completions` (JSON + SSE)
   alongside the Ollama routes, so Hermes providers speak it natively. Hermes

@@ -65,6 +65,14 @@ class PrimaryConfig:
     fallback_base_url: str = ""
     fallback_model: str = ""
     fallback_api_key: str = ""
+    # Wall-clock cap for the fallback rung of the chain; the primary rung is
+    # capped at timeout_s. A rung that exceeds its cap is abandoned and the
+    # chain fails over instead of stalling the turn.
+    fallback_timeout_s: float = 60.0
+    # Max silent gap (seconds) allowed while streaming a primary execution:
+    # bounds a hung engine without cutting off long thinking turns, whose
+    # token stream pauses only briefly. 0 disables stall detection.
+    stall_timeout_s: float = 90.0
 
 
 @dataclass

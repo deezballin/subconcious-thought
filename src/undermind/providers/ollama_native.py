@@ -26,10 +26,14 @@ class OllamaNativeProvider:
         base_url: str,
         model: str,
         timeout_s: float = 30.0,
+        stall_timeout_s: float = 0.0,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout_s = timeout_s
+        # Max silent gap between streamed tokens during execute(); bounds a
+        # hung engine without cutting off long thinking turns. 0 = disabled.
+        self.stall_timeout_s = stall_timeout_s
 
     def stream_tokens(self, messages, max_tokens, temperature, on_token) -> str:
         """Stream tokens with logprobs from /api/generate.
@@ -113,20 +117,57 @@ class OllamaNativeProvider:
         return [m.get("name", "") for m in response.json().get("models", [])]
 
     def execute(self, branch: str, context: str | None = None) -> str:
-        """Non-streaming generate for primary-pipeline execution."""
+        """Generate for primary-pipeline execution.
+
+        Streams internally so the socket read timeout bounds the silent gap
+        between tokens (stall_timeout_s) instead of the whole completion —
+        a thinking model that pauses mid-reasoning is safe, a wedged engine
+        trips the stall timeout quickly. With stall detection disabled this
+        is a plain non-streaming request capped by timeout_s.
+        """
         prompt = f"{context}\n\n{branch}" if context else branch
+        if not self.stall_timeout_s or self.stall_timeout_s <= 0:
+            payload = {"model": self.model, "prompt": prompt, "stream": False}
+            try:
+                response = requests.post(
+                    f"{self.base_url}{GENERATE_PATH}",
+                    json=payload,
+                    timeout=self.timeout_s,
+                )
+                response.raise_for_status()
+            except requests.RequestException as exc:
+                raise ProviderError(f"Primary execution failed: {exc}") from exc
+            return response.json().get("response", "")
+
         payload = {
             "model": self.model,
             "prompt": prompt,
-            "stream": False,
+            "stream": True,
+            "options": {"logprobs": 1},
         }
+        collected: list[str] = []
         try:
-            response = requests.post(
+            with requests.post(
                 f"{self.base_url}{GENERATE_PATH}",
                 json=payload,
-                timeout=self.timeout_s,
-            )
-            response.raise_for_status()
+                stream=True,
+                timeout=(10.0, self.stall_timeout_s),
+            ) as response:
+                if response.status_code != 200:
+                    body = response.text[:300]
+                    raise ProviderError(
+                        f"{self.base_url} returned {response.status_code}: {body}"
+                    )
+                for raw_line in response.iter_lines():
+                    if not raw_line:
+                        continue
+                    try:
+                        chunk = json.loads(raw_line.decode("utf-8", errors="replace"))
+                    except ValueError:
+                        continue
+                    token_text = chunk.get("response", "")
+                    if token_text:
+                        collected.append(token_text)
         except requests.RequestException as exc:
             raise ProviderError(f"Primary execution failed: {exc}") from exc
-        return response.json().get("response", "")
+        return "".join(collected)
