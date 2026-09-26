@@ -32,12 +32,27 @@ Done:
   (pixel-motion check) with `node --check` green.
 
 In flight:
-- Ubuntu 26.04.1 mini (netboot) VM **BUNTU** running in **VirtualBox** 7.2.20
-  (Hyper-V dropped — flaky netboot). Host has user-mode `VBoxManage`, so the VM
-  can be snapshotted/inspected without elevation. Next: get guest IP
-  (`hostname -I`), install openssh-server if missing, then
-  `sudo bash <repo>/scripts/vm_bootstrap.sh <repo>` → Gate 9 reboot test →
-  `snapshot_cleanup.sh` → `VBoxManage snapshot BUNTU take pre-iso` → ISO build.
+- **Hermes bridge (direct, no sandbox)** — decided 2026-09-24: skip the VM/ISO
+  fight; bridge Undermind straight into Hermes on this machine. Shape: Hermes
+  points its Ollama traffic at Undermind's proxy (:11435), plus a small
+  fail-open `undermind` sibling plugin (pattern copied from the live
+  `subconscious` plugin) feeding inputs / injecting mined intents.
+- **Model hygiene rule (learned 2026-09-24):** artifacts of the abliteration
+  work — e.g. the `qwen3.8-9b-distill-uncensored-heretic` gguf — are **reading
+  material, not serving models**. Never wire them into a config as a working
+  LLM; this exact mistake has propagated through old session notes before
+  (including node 5's inventory). Working stable: the Bonsai line (his own —
+  27b-1bit on Ollama, 1.7B/4B Q1_0 on the NPU), `pupukachoo` (working small
+  model), `qwen2.5:0.5b` (utility/SLM). Verify with Dewayne before seating any
+  model.
+- VM/ISO sandbox track: **parked** (2026-09-24) after three installer
+  generations fought back. Lessons preserved in docs/VM_CHECKLIST.md (netboot
+  is a downloader; corrupt 26.04.1 mini iso — tail zeros; the npu-folder
+  "mini" ISOs are the revived Ubuntu-Mini-ISO live-chooser project; EFI
+  firmware required; VirtualBox NAT manual values 10.0.2.15/24 gw .2 dns .3).
+  VM `undermind-build` exists, powered off, healthy resolute disc attached.
+  Candidate future path: WSL Ubuntu (already installed, Stopped) or the
+  container rootfs route — no installer required.
 
 Backlog ideas (not built):
 - ISO build script / container-rootfs fallback; Brain↔Undermind bridge
