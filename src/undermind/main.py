@@ -266,6 +266,23 @@ def _build_parser() -> argparse.ArgumentParser:
         "--status", action="store_true", help="Print pipeline status and exit"
     )
     parser.add_argument(
+        "--doctor",
+        action="store_true",
+        help="Check all five local pipelines (Ollama, Lemonade, Undermind, "
+        "OmniRoute, Hermes) and report up/dead/orphaned",
+    )
+    parser.add_argument(
+        "--proxy",
+        action="store_true",
+        help="Run the HTTP proxy with the built-in daydream scheduler "
+        "(exits quietly when the port is already serving — watchdog mode)",
+    )
+    parser.add_argument(
+        "--doctor-json",
+        action="store_true",
+        help="--doctor with machine-readable JSON output",
+    )
+    parser.add_argument(
         "--version", action="version", version=f"undermind {__version__}"
     )
     return parser
@@ -274,6 +291,16 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     config = load_config(args.config)
+
+    if args.doctor or args.doctor_json:
+        from undermind.doctor import run_doctor
+
+        return run_doctor(config, as_json=args.doctor_json)
+
+    if args.proxy:
+        from undermind.proxy import ProxyServer
+
+        return ProxyServer(config=config).run_forever()
 
     if args.daydream_once:
         store = UndermindStore(config.store.db_path)

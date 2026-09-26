@@ -9,6 +9,11 @@ OpenAI-compatible routes (/v1/models, /v1/chat/completions — JSON and SSE
 streaming) are served alongside, so /v1-speaking clients (Hermes providers)
 point at the same port with no shim.
 
+The proxy also hosts the daydream miner: a background scheduler mines
+recorded inputs into intents whenever the feed goes idle, so the
+Hermes bridge self-sustains without a separate --daydream-once process.
+/api/health exposes the whole picture for `undermind doctor`.
+
 For every incoming prompt the proxy:
 1. Returns the cached response instantly when the prompt hash matches.
 2. On a miss, streams a draft continuation with confidence tracking; the
@@ -25,6 +30,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import socket
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -32,8 +38,11 @@ from typing import Optional
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
+from undermind import __version__
 from undermind.config import Config, load_config
 from undermind.confidence import ConfidenceTracker
+from undermind.daydream import DaydreamWorker
+from undermind.exporter import Exporter
 from undermind.handoff import UniversalHandoff
 from undermind.predictor import DraftPredictor
 from undermind.providers import build_draft_client, build_primary_provider
@@ -73,6 +82,90 @@ class PredictionCache:
         with self._lock:
             self._store.clear()
 
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._store)
+
+
+class DaydreamScheduler:
+    """Mine recorded inputs into intents whenever the input feed goes idle.
+
+    A daemon thread inside the proxy process. Every /api/inputs POST counts
+    as activity and re-arms the idle watchdog; once the feed has been quiet
+    for ``idle_threshold_s`` the worker runs one mining cycle (reusing the
+    exact DaydreamWorker logic — no separate process needed).
+    """
+
+    def __init__(
+        self,
+        worker: DaydreamWorker,
+        idle_threshold_s: float,
+        poll_interval_s: float = 0.5,
+    ) -> None:
+        self.worker = worker
+        self.idle_threshold_s = idle_threshold_s
+        self.poll_interval_s = poll_interval_s
+        self._stop = threading.Event()
+        self._last_activity_ns = time.perf_counter_ns()
+        self._thread: Optional[threading.Thread] = None
+        self.cycles_run = 0
+        self.last_result = worker.last_result
+
+    def notify_activity(self) -> None:
+        """Re-arm the idle watchdog (call after each recorded input)."""
+        self._last_activity_ns = time.perf_counter_ns()
+
+    def idle_for(self) -> float:
+        return (time.perf_counter_ns() - self._last_activity_ns) / 1e9
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._run, name="undermind-proxy-daydream", daemon=True
+        )
+        self._thread.start()
+
+    def stop(self, timeout: float = 2.0) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+            self._thread = None
+
+    def status(self) -> dict:
+        result = self.worker.last_result
+        return {
+            "running": bool(self._thread and self._thread.is_alive()),
+            "idle_threshold_s": self.idle_threshold_s,
+            "idle_for_s": round(self.idle_for(), 1),
+            "cycles_run": self.cycles_run,
+            "last_result": result.to_dict() if result else None,
+        }
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            if self.idle_for() >= self.idle_threshold_s:
+                try:
+                    result = self.worker.run_cycle()
+                    if result is not None:
+                        self.cycles_run += 1  # productive mining cycles only
+                        self.last_result = result
+                except Exception:
+                    pass  # fail-open: mining must never take the proxy down
+                # Sleep a full idle window before even considering another
+                # cycle; fresh activity re-arms the watchdog anyway.
+                self._stop.wait(max(self.idle_threshold_s, self.poll_interval_s))
+            else:
+                self._stop.wait(self.poll_interval_s)
+
+
+def port_in_use(host: str, port: int) -> bool:
+    """True when something already accepts connections on host:port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(1.0)
+        return sock.connect_ex((host, port)) == 0
+
 
 class _StopStream(Exception):
     """Internal: unwinds the token stream after the threshold crossing."""
@@ -102,6 +195,8 @@ class UndermindProxy(BaseHTTPRequestHandler):
             self._handle_ps()
         elif path == "/api/intents":
             self._handle_intents()
+        elif path == "/api/health":
+            self._handle_health()
         elif path == "/v1/models":
             self._handle_v1_models()
         else:
@@ -136,9 +231,16 @@ class UndermindProxy(BaseHTTPRequestHandler):
                 self._error(ValueError("empty text"), status=400)
                 return
             input_id = self.store.record_input(text)
+            self._record_input_activity()
             self._send_json({"ok": True, "input_id": input_id})
         except Exception as exc:
             self._error(exc, status=500)
+
+    def _record_input_activity(self) -> None:
+        """Nudge the proxy's daydream scheduler: fresh input just landed."""
+        scheduler = getattr(self, "daydream_scheduler", None)
+        if scheduler is not None:
+            scheduler.notify_activity()
 
     def _handle_intents(self) -> None:
         """GET /api/intents?min_count=N — the intents Undermind has mined."""
@@ -162,6 +264,24 @@ class UndermindProxy(BaseHTTPRequestHandler):
             for row in rows[:20]
         ]
         self._send_json({"intents": intents})
+
+    def _handle_health(self) -> None:
+        """GET /api/health — one-stop status for the doctor and watchdogs."""
+        scheduler = getattr(self, "daydream_scheduler", None)
+        self._send_json(
+            {
+                "ok": True,
+                "version": __version__,
+                "model": self.config.primary.model,
+                "draft_model": self.config.draft.model,
+                "cache_entries": len(self.cache),
+                "handoffs": self.store.count_handoffs(),
+                "inputs": self.store.count_inputs(),
+                "unprocessed_inputs": self.store.count_unprocessed(),
+                "intents": len(self.store.list_intents(min_count=1)),
+                "daydream": scheduler.status() if scheduler else None,
+            }
+        )
 
     # ------------------------------------------------------------------
     # info endpoints
@@ -558,25 +678,62 @@ class ProxyServer:
                 "min_chars": self.config.confidence.min_chars,
             },
         )
+        self.exporter = Exporter(self.store, self.config.daydream.export_path)
+        self.daydream = DaydreamWorker(
+            store=self.store,
+            exporter=self.exporter,
+            idle_threshold_s=self.config.daydream.idle_threshold_s,
+            min_intent_count=self.config.daydream.min_intent_count,
+            max_samples_per_intent=self.config.daydream.max_samples_per_intent,
+        )
+        self.daydream_scheduler = DaydreamScheduler(
+            worker=self.daydream,
+            idle_threshold_s=self.config.daydream.idle_threshold_s,
+            poll_interval_s=self.config.daydream.poll_interval_s,
+        )
         self._server: Optional[ThreadingHTTPServer] = None
 
     def start(self) -> None:
         self._server = ThreadingHTTPServer((self.host, self.port), self._handler_factory())
+        self.daydream_scheduler.start()
         print(f"Undermind proxy running at http://{self.host}:{self.port}")
         print(f"Draft: {self.config.draft.model} @ {self.config.draft.base_url}")
         print(f"Primary chain: {self.chain_desc}")
+        print(
+            "Daydream: auto-mining on idle "
+            f"(threshold {self.config.daydream.idle_threshold_s:.0f}s)"
+        )
         print("Press Ctrl+C to stop.")
         try:
             self._server.serve_forever()
         except KeyboardInterrupt:
             print("\nProxy stopped.")
         finally:
+            self.daydream_scheduler.stop()
             self.store.close()
+
+    def run_forever(self) -> int:
+        """Serve; if the port is already bound, exit 0 so watchdogs stay calm.
+
+        A scheduled task fires every few minutes and at logon. When a healthy
+        proxy is already listening, this instance exits successfully instead
+        of crash-looping — that is what makes the watchdog hands-off.
+        """
+        if port_in_use(self.host, self.port):
+            print(
+                f"Port {self.port} already serving — another proxy owns it. "
+                "Exiting quietly (watchdog no-op)."
+            )
+            self.store.close()
+            return 0
+        self.start()
+        return 0
 
     def shutdown(self) -> None:
         if self._server is not None:
             self._server.shutdown()
             self._server = None
+        self.daydream_scheduler.stop()
 
     def _handler_factory(self):
         _cache = self.cache
@@ -586,6 +743,7 @@ class ProxyServer:
         _store = self.store
         _config = self.config
         _predictor = self.predictor
+        _scheduler = self.daydream_scheduler
 
         class ProxyHandler(UndermindProxy):
             cache = _cache
@@ -595,6 +753,7 @@ class ProxyServer:
             store = _store
             config = _config
             predictor = _predictor
+            daydream_scheduler = _scheduler
 
         return ProxyHandler
 
@@ -605,7 +764,7 @@ def main() -> None:
     print(f"Listening on http://{PROXY_HOST}:{PROXY_PORT}")
     print("=" * 60)
     server = ProxyServer()
-    server.start()
+    raise SystemExit(server.run_forever())
 
 
 if __name__ == "__main__":

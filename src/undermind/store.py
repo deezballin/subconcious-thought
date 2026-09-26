@@ -157,6 +157,14 @@ class UndermindStore:
             row = self._conn.execute("SELECT COUNT(*) AS n FROM inputs").fetchone()
             return int(row["n"])
 
+    def count_unprocessed(self) -> int:
+        """Inputs still awaiting daydream mining (proxy /api/health)."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM inputs WHERE processed = 0"
+            ).fetchone()
+            return int(row["n"])
+
     # ------------------------------------------------------------------
     # intents
     # ------------------------------------------------------------------

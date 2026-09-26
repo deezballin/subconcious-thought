@@ -51,6 +51,24 @@ In flight:
   verification bypasses that gate — always cross-check `hermes plugins list`).
   Live loop now proven end-to-end: turn recorded (inputs id 8) → mined →
   "bug fix login" count 6 → eligible for injection on the next turn.
+- **Self-sustaining bridge layer (2026-09-25):** (1) the proxy now hosts the
+  daydream miner — a `DaydreamScheduler` thread auto-mines recorded inputs
+  whenever the feed goes idle (`idle_threshold_s`), so intents no longer need
+  manual `--daydream-once`; `/api/health` exposes counts, scheduler state and
+  cache size. (2) `uv run undermind --doctor` (+ `--doctor-json`) censuses all
+  five pipelines (Ollama, Lemonade, Undermind, OmniRoute, Hermes gateway) with
+  up/dead/degraded/orphaned verdicts; model presence is verified per engine,
+  OmniRoute's 401 counts as up, and Hermes gateway census ignores <120s
+  transient `hermes_cli.main` processes (one-shot `-z` runs would otherwise
+  look like orphans). (3) Supervisor installed: Startup VBS
+  (`undermind_supervisor.vbs`, house style, beside the existing
+  `gateway-service\Undermind_Proxy.vbs` logon launcher) runs a hidden 5-min
+  loop that revives :11435 when dead; the proxy self-guards (quiet exit 0
+  when the port is already serving) so overlaps are harmless. A scheduled-task
+  variant exists (`scripts/register_watchdog_task.ps1`) but needs one admin
+  approval — Windows denies non-elevated task registration; the VBS path was
+  chosen instead. Live-verified: killed the proxy, supervisor revived it in
+  ~20s, scheduler mined autonomously. 136 tests green.
 - **Model hygiene rule (learned 2026-09-24):** artifacts of the abliteration
   work — e.g. the `qwen3.8-9b-distill-uncensored-heretic` gguf — are **reading
   material, not serving models**. Never wire them into a config as a working

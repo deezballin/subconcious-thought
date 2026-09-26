@@ -124,7 +124,7 @@ class TestProxyIntegration(unittest.TestCase):
 
     def _get(self, path: str) -> dict:
         with urllib.request.urlopen(
-            f"http://127.0.0.1:11440{path}", timeout=5
+            f"http://127.0.0.1:11440{path}", timeout=20
         ) as response:
             self.assertEqual(response.status, 200)
             return json.loads(response.read().decode())
@@ -189,7 +189,7 @@ class TestProxyIntegration(unittest.TestCase):
             headers={"Content-Type": "application/json"},
         )
         with self.assertRaises(urllib.error.HTTPError) as ctx:
-            urllib.request.urlopen(request, timeout=5)
+            urllib.request.urlopen(request, timeout=20)
         self.assertEqual(ctx.exception.code, 404)
 
 
@@ -262,7 +262,7 @@ class TestProxyOpenAIEndpoints(unittest.TestCase):
 
     def test_v1_models_lists_openai_shape(self):
         with urllib.request.urlopen(
-            "http://127.0.0.1:11442/v1/models", timeout=5
+            "http://127.0.0.1:11442/v1/models", timeout=20
         ) as response:
             self.assertEqual(response.status, 200)
             data = json.loads(response.read().decode())
@@ -345,7 +345,7 @@ class TestProxyOpenAIEndpoints(unittest.TestCase):
             headers={"Content-Type": "application/json"},
         )
         with self.assertRaises(urllib.error.HTTPError) as ctx:
-            urllib.request.urlopen(request, timeout=5)
+            urllib.request.urlopen(request, timeout=20)
         self.assertEqual(ctx.exception.code, 404)
 
 

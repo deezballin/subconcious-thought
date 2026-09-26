@@ -1,7 +1,23 @@
-# scripts/ — sandbox demo tooling
+# scripts/ — sandbox demo tooling + Windows host tooling
 
 Everything the live ISO needs to demo itself after boot, so the 30-minute
 sandbox window is spent watching instead of installing.
+
+## Windows host tooling (live Hermes bridge)
+
+| File | Role |
+|---|---|
+| `undermind_supervisor.ps1` | Mid-session crash supervisor: every 5 min, if :11435 is dead, relaunch the proxy detached (hidden). Logs to `.freebuff/supervisor.log` |
+| `undermind_supervisor.vbs` | Hidden logon launcher for the supervisor. Install: copy to `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\` (already installed) |
+| `register_watchdog_task.ps1` | OPTIONAL one-click admin script: registers the `UndermindProxyWatchdog` scheduled task (every 5 min + at logon). Only needed if you prefer Task Scheduler over the Startup VBS |
+| `undermind_proxy_watchdog.ps1` | Watchdog tick used by the scheduled task: `undermind --proxy` (self-guarding no-op when the port is already serving) |
+
+Reboot persistence rides on the existing `gateway-service\Undermind_Proxy.vbs`
+Startup launcher; the supervisor adds mid-session revival. The proxy itself
+also hosts the daydream miner (auto-mines on input idle) and `/api/health`.
+Stack census: `uv run undermind --doctor` (add `--doctor-json` for machines).
+
+
 
 | File | Role |
 |---|---|
