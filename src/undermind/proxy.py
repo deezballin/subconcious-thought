@@ -5,6 +5,10 @@ Wraps the configured primary pipeline behind an Ollama-compatible HTTP API on
 localhost:11435, so existing wrappers (Hermes, OpenClaw, anything speaking the
 Ollama protocol) work unchanged.
 
+OpenAI-compatible routes (/v1/models, /v1/chat/completions — JSON and SSE
+streaming) are served alongside, so /v1-speaking clients (Hermes providers)
+point at the same port with no shim.
+
 For every incoming prompt the proxy:
 1. Returns the cached response instantly when the prompt hash matches.
 2. On a miss, streams a draft continuation with confidence tracking; the
@@ -20,11 +24,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
 from undermind.config import Config, load_config
@@ -95,6 +100,10 @@ class UndermindProxy(BaseHTTPRequestHandler):
             self._handle_tags()
         elif path == "/api/ps":
             self._handle_ps()
+        elif path == "/api/intents":
+            self._handle_intents()
+        elif path == "/v1/models":
+            self._handle_v1_models()
         else:
             self._not_found()
 
@@ -104,11 +113,55 @@ class UndermindProxy(BaseHTTPRequestHandler):
             self._handle_generate()
         elif path == "/api/chat":
             self._handle_chat()
+        elif path == "/api/inputs":
+            self._handle_inputs()
+        elif path == "/v1/chat/completions":
+            self._handle_v1_chat()
         else:
             self._not_found()
 
     def log_message(self, format, *args) -> None:
         pass
+
+    # ------------------------------------------------------------------
+    # daydream bridge endpoints (Hermes plugin fuel)
+    # ------------------------------------------------------------------
+
+    def _handle_inputs(self) -> None:
+        """POST {"text": ...} — record a prompt into the daydream store."""
+        try:
+            body = self._read_body()
+            text = str(body.get("text", "")).strip()
+            if not text:
+                self._error(ValueError("empty text"), status=400)
+                return
+            input_id = self.store.record_input(text)
+            self._send_json({"ok": True, "input_id": input_id})
+        except Exception as exc:
+            self._error(exc, status=500)
+
+    def _handle_intents(self) -> None:
+        """GET /api/intents?min_count=N — the intents Undermind has mined."""
+        try:
+            query = parse_qs(urlparse(self.path).query)
+            min_count = int(query.get("min_count", ["1"])[0])
+        except Exception:
+            min_count = 1
+        try:
+            rows = self.store.list_intents(min_count=min_count)
+        except Exception as exc:
+            self._error(exc, status=500)
+            return
+        intents = [
+            {
+                "intent_id": row["intent_id"],
+                "signature": row["signature"],
+                "count": row["count"],
+                "last_seen_ms": row["last_seen_ms"],
+            }
+            for row in rows[:20]
+        ]
+        self._send_json({"intents": intents})
 
     # ------------------------------------------------------------------
     # info endpoints
@@ -189,25 +242,48 @@ class UndermindProxy(BaseHTTPRequestHandler):
         model = str(body.get("model", self.config.primary.model))
         self._serve_completion(prompt, model, chat_format=True)
 
-    def _serve_completion(self, prompt: str, model: str, chat_format: bool) -> None:
+    def _serve_completion(
+        self,
+        prompt: str,
+        model: str,
+        chat_format: bool,
+        openai: bool = False,
+        stream: bool = False,
+    ) -> None:
         key = self._hash_prompt(prompt)
         cached = self.cache.get(key)
         if cached is not None:
-            self._send_completion(cached, model, chat_format, cached=True, meta=None)
+            self._send_completion(
+                cached,
+                model,
+                chat_format,
+                cached=True,
+                meta=None,
+                openai=openai,
+                stream=stream,
+                prompt=prompt,
+            )
             return
 
         try:
             outcome = self._execute_branch(prompt)
         except ProviderError as exc:
-            self._error(exc, status=502)
+            self._send_error(exc, status=502, openai=openai)
             return
         except Exception as exc:
-            self._error(exc, status=500)
+            self._send_error(exc, status=500, openai=openai)
             return
 
         self.cache.set(key, outcome["response"])
         self._send_completion(
-            outcome["response"], model, chat_format, cached=False, meta=outcome
+            outcome["response"],
+            model,
+            chat_format,
+            cached=False,
+            meta=outcome,
+            openai=openai,
+            stream=stream,
+            prompt=prompt,
         )
 
     def _send_completion(
@@ -217,6 +293,9 @@ class UndermindProxy(BaseHTTPRequestHandler):
         chat_format: bool,
         cached: bool,
         meta: Optional[dict],
+        openai: bool = False,
+        stream: bool = False,
+        prompt: str = "",
     ) -> None:
         undermind = {"cached": cached}
         if meta:
@@ -227,6 +306,12 @@ class UndermindProxy(BaseHTTPRequestHandler):
                     "latency_ms": meta["latency_ms"],
                 }
             )
+        if openai:
+            if stream:
+                self._send_openai_stream(text, model)
+            else:
+                self._send_openai_json(text, model, undermind, prompt=prompt)
+            return
         if chat_format:
             self._send_json(
                 {
@@ -240,6 +325,112 @@ class UndermindProxy(BaseHTTPRequestHandler):
             self._send_json(
                 {"model": model, "response": text, "cached": cached, "undermind": undermind}
             )
+
+    # ------------------------------------------------------------------
+    # OpenAI-compatible routes (Hermes providers speak /v1)
+    # ------------------------------------------------------------------
+
+    def _handle_v1_models(self) -> None:
+        models = self._available_models()
+        created = int(time.time())
+        self._send_json(
+            {
+                "object": "list",
+                "data": [
+                    {
+                        "id": m,
+                        "object": "model",
+                        "created": created,
+                        "owned_by": "undermind",
+                    }
+                    for m in models
+                ],
+            }
+        )
+
+    def _handle_v1_chat(self) -> None:
+        try:
+            body = self._read_body()
+        except Exception as exc:
+            self._send_openai_error(str(exc), status=400)
+            return
+        messages = body.get("messages") or []
+        prompt = self._last_user_content(messages)
+        model = str(body.get("model") or self.config.primary.model)
+        stream = bool(body.get("stream", False))
+        self._serve_completion(
+            prompt, model, chat_format=False, openai=True, stream=stream
+        )
+
+    def _send_openai_json(
+        self, text: str, model: str, undermind: dict, prompt: str = ""
+    ) -> None:
+        prompt_tokens = max(1, len(prompt.split())) if prompt else 0
+        completion_tokens = max(1, len(text.split())) if text else 0
+        self._send_json(
+            {
+                "id": f"chatcmpl-{hashlib.sha256(text.encode('utf-8')).hexdigest()[:24]}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": text},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens,
+                },
+                "undermind": undermind,
+            }
+        )
+
+    def _send_openai_stream(self, text: str, model: str) -> None:
+        completion_id = f"chatcmpl-{hashlib.sha256(text.encode('utf-8')).hexdigest()[:24]}"
+        created = int(time.time())
+
+        def event(delta: dict, finish_reason: Optional[str] = None) -> bytes:
+            payload = json.dumps(
+                {
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model,
+                    "choices": [
+                        {"index": 0, "delta": delta, "finish_reason": finish_reason}
+                    ],
+                }
+            )
+            return f"data: {payload}\n\n".encode("utf-8")
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(event({"role": "assistant"}))
+        for piece in re.findall(r"\s*\S+", text):
+            self.wfile.write(event({"content": piece}))
+        self.wfile.write(event({}, finish_reason="stop"))
+        self.wfile.write(b"data: [DONE]\n\n")
+        self.wfile.flush()
+
+    def _send_openai_error(self, message: str, status: int = 500) -> None:
+        body = json.dumps(
+            {"error": {"message": message, "type": "undermind_proxy_error"}}
+        ).encode("utf-8")
+        self._send_raw(status, body)
+
+    def _send_error(
+        self, exc: Exception, status: int = 500, openai: bool = False
+    ) -> None:
+        if openai:
+            self._send_openai_error(str(exc), status)
+        else:
+            self._error(exc, status)
 
     # ------------------------------------------------------------------
     # confidence-crossing branch execution
@@ -348,7 +539,9 @@ class ProxyServer:
         self.store = UndermindStore(self.config.store.db_path)
         self.cache = PredictionCache(ttl=self.config.proxy.cache_ttl_s)
         self.draft_client = build_draft_client(self.config)
-        self.primary = build_primary_provider(self.config)
+        from undermind.providers.fallback import build_primary_chain
+
+        self.primary, self.chain_desc = build_primary_chain(self.config)
         self.handoff = UniversalHandoff(
             provider=self.primary,
             provider_name=self.config.primary.kind,
@@ -371,7 +564,7 @@ class ProxyServer:
         self._server = ThreadingHTTPServer((self.host, self.port), self._handler_factory())
         print(f"Undermind proxy running at http://{self.host}:{self.port}")
         print(f"Draft: {self.config.draft.model} @ {self.config.draft.base_url}")
-        print(f"Primary: {self.config.primary.kind} ({self.config.primary.model})")
+        print(f"Primary chain: {self.chain_desc}")
         print("Press Ctrl+C to stop.")
         try:
             self._server.serve_forever()

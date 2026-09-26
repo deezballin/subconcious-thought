@@ -60,6 +60,11 @@ class PrimaryConfig:
     webhook_url: str = ""
     timeout_s: float = 120.0
     retries: int = 1
+    # Optional featherweight fallback (fail-open chain; see providers/fallback.py)
+    fallback_kind: str = ""
+    fallback_base_url: str = ""
+    fallback_model: str = ""
+    fallback_api_key: str = ""
 
 
 @dataclass

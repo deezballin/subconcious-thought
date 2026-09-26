@@ -88,7 +88,9 @@ class TestListener(unittest.TestCase):
 
 class TestConfig(unittest.TestCase):
     def test_defaults(self):
-        config = load_config(None)
+        # Load explicitly from a nonexistent path so the suite is hermetic and
+        # does not depend on a (real) config.toml sitting in the repo root.
+        config = load_config(os.path.join(os.sep, "nonexistent", "config.toml"))
         self.assertEqual(config.confidence.threshold, 0.95)
         self.assertEqual(config.confidence.mode, "latest")
         self.assertEqual(config.draft.base_url, "http://localhost:13305")

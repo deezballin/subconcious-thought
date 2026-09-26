@@ -76,7 +76,11 @@ class TestPredictionCache(unittest.TestCase):
 
 
 def _make_server(port: int, tmpdir: str) -> ProxyServer:
-    config = load_config(None)
+    # Hermetic: build defaults directly so a repo-root config.toml (e.g. the
+    # live Hermes bridge seating) never leaks into the test suite.
+    from undermind.config import Config
+
+    config = Config()
     config.store.db_path = os.path.join(tmpdir, f"proxy-{port}.db")
     config.confidence.min_tokens = 1
     config.confidence.min_chars = 0
@@ -94,7 +98,7 @@ class TestProxyIntegration(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
-        cls.server = _make_server(11438, cls.tmp.name)
+        cls.server = _make_server(11440, cls.tmp.name)
         cls.thread = threading.Thread(
             target=cls.server._server.serve_forever, daemon=True
         )
@@ -110,7 +114,7 @@ class TestProxyIntegration(unittest.TestCase):
 
     def _post(self, path: str, payload: dict, timeout: int = 30) -> dict:
         request = urllib.request.Request(
-            f"http://127.0.0.1:11438{path}",
+            f"http://127.0.0.1:11440{path}",
             data=json.dumps(payload).encode(),
             headers={"Content-Type": "application/json"},
         )
@@ -120,7 +124,7 @@ class TestProxyIntegration(unittest.TestCase):
 
     def _get(self, path: str) -> dict:
         with urllib.request.urlopen(
-            f"http://127.0.0.1:11438{path}", timeout=5
+            f"http://127.0.0.1:11440{path}", timeout=5
         ) as response:
             self.assertEqual(response.status, 200)
             return json.loads(response.read().decode())
@@ -180,7 +184,7 @@ class TestProxyIntegration(unittest.TestCase):
 
     def test_unknown_endpoint_404(self):
         request = urllib.request.Request(
-            "http://127.0.0.1:11438/api/bogus",
+            "http://127.0.0.1:11440/api/bogus",
             data=b"{}",
             headers={"Content-Type": "application/json"},
         )
@@ -193,7 +197,7 @@ class TestProxyPrimaryFailure(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
-        cls.server = _make_server(11439, cls.tmp.name)
+        cls.server = _make_server(11441, cls.tmp.name)
 
         class BrokenPrimary:
             def execute(self, branch, context=None):
@@ -201,7 +205,7 @@ class TestProxyPrimaryFailure(unittest.TestCase):
 
         cls.server.primary = BrokenPrimary()
         handler = cls.server._handler_factory()
-        cls.server._server = ThreadingHTTPServer((cls.server.host, 11439), handler)
+        cls.server._server = ThreadingHTTPServer((cls.server.host, 11441), handler)
         cls.thread = threading.Thread(
             target=cls.server._server.serve_forever, daemon=True
         )
@@ -217,13 +221,132 @@ class TestProxyPrimaryFailure(unittest.TestCase):
 
     def test_primary_failure_maps_to_502(self):
         request = urllib.request.Request(
-            "http://127.0.0.1:11439/api/generate",
+            "http://127.0.0.1:11441/api/generate",
             data=json.dumps({"model": "m", "prompt": "hello"}).encode(),
             headers={"Content-Type": "application/json"},
         )
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             urllib.request.urlopen(request, timeout=10)
         self.assertEqual(ctx.exception.code, 502)
+
+
+class TestProxyOpenAIEndpoints(unittest.TestCase):
+    """OpenAI-compatible routes: /v1/models + /v1/chat/completions (JSON/SSE)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.server = _make_server(11442, cls.tmp.name)
+        cls.thread = threading.Thread(
+            target=cls.server._server.serve_forever, daemon=True
+        )
+        cls.thread.start()
+        time.sleep(0.3)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server._server.shutdown()
+        cls.server._server.server_close()
+        cls.server.store.close()
+        cls.tmp.cleanup()
+
+    def _post(self, path: str, payload: dict) -> dict:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:11442{path}",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=10) as response:
+            self.assertEqual(response.status, 200)
+            return json.loads(response.read().decode())
+
+    def test_v1_models_lists_openai_shape(self):
+        with urllib.request.urlopen(
+            "http://127.0.0.1:11442/v1/models", timeout=5
+        ) as response:
+            self.assertEqual(response.status, 200)
+            data = json.loads(response.read().decode())
+        self.assertEqual(data["object"], "list")
+        first = data["data"][0]
+        for field in ("id", "object", "created", "owned_by"):
+            self.assertIn(field, first)
+        self.assertEqual(first["object"], "model")
+        self.assertIn("FakeDraft-9B", [m["id"] for m in data["data"]])
+
+    def test_v1_chat_completion_json(self):
+        data = self._post(
+            "/v1/chat/completions",
+            {
+                "model": "whatever",
+                "messages": [
+                    {"role": "system", "content": "be brief"},
+                    {"role": "user", "content": "The capital of Spain is"},
+                ],
+            },
+        )
+        self.assertEqual(data["object"], "chat.completion")
+        choice = data["choices"][0]
+        self.assertEqual(choice["message"]["role"], "assistant")
+        # FakeDraftClient streams " Paris" for any "capital" prompt.
+        self.assertEqual(choice["message"]["content"], "ECHO::The capital of Spain is Paris")
+        self.assertEqual(choice["finish_reason"], "stop")
+        self.assertIn("undermind", data)
+        self.assertTrue(data["undermind"]["confidence_crossed"])
+        self.assertGreaterEqual(data["usage"]["total_tokens"], 2)
+
+    def test_v1_chat_completion_echoes_model_and_cached(self):
+        payload = {
+            "model": "my-model",
+            "messages": [{"role": "user", "content": "hello v1"}],
+        }
+        first = self._post("/v1/chat/completions", payload)
+        second = self._post("/v1/chat/completions", payload)
+        self.assertEqual(first["model"], "my-model")
+        self.assertEqual(first["choices"][0]["message"]["content"], "ECHO::hello v1")
+        self.assertFalse(first["undermind"]["cached"])
+        self.assertTrue(second["undermind"]["cached"])
+
+    def test_v1_chat_completion_stream(self):
+        request = urllib.request.Request(
+            "http://127.0.0.1:11442/v1/chat/completions",
+            data=json.dumps(
+                {
+                    "model": "my-model",
+                    "messages": [{"role": "user", "content": "stream this please"}],
+                    "stream": True,
+                }
+            ).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=10) as response:
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.headers.get("Content-Type"), "text/event-stream")
+            body = response.read().decode()
+        events = [
+            line[len("data: ") :]
+            for line in body.splitlines()
+            if line.startswith("data: ")
+        ]
+        self.assertEqual(events[-1], "[DONE]")
+        chunks = [json.loads(e) for e in events[:-1]]
+        self.assertTrue(all(c["object"] == "chat.completion.chunk" for c in chunks))
+        self.assertEqual(chunks[0]["choices"][0]["delta"], {"role": "assistant"})
+        content = "".join(
+            c["choices"][0]["delta"].get("content", "") for c in chunks[1:-1]
+        )
+        self.assertEqual(content, "ECHO::stream this please")
+        self.assertEqual(chunks[-1]["choices"][0]["finish_reason"], "stop")
+        self.assertTrue(content.startswith("ECHO::stream"))
+
+    def test_v1_bogus_path_404(self):
+        request = urllib.request.Request(
+            "http://127.0.0.1:11442/v1/bogus",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+        )
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(request, timeout=5)
+        self.assertEqual(ctx.exception.code, 404)
 
 
 if __name__ == "__main__":

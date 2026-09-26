@@ -4,10 +4,10 @@
 > code and doc in sync. Runtime defaults live in `config.example.toml` (copy to
 > `config.toml` to override anything).
 
-## 0. Status (as of 2026-09-24)
+## 0. Status (as of 2026-09-25)
 
-**Implementation complete — 101 offline tests green. Initial git commit made
-2026-09-24 (root commit, everything above included).**
+**Implementation complete — 117 offline tests green (2026-09-25). Initial git
+commit made 2026-09-24 (root commit, everything above included).**
 (`uv run python -m unittest discover -s src/undermind -p "test_*.py"` →
 `OK (skipped=1)`; the skip is the live-backend integration test).
 
@@ -32,11 +32,19 @@ Done:
   (pixel-motion check) with `node --check` green.
 
 In flight:
-- **Hermes bridge (direct, no sandbox)** — decided 2026-09-24: skip the VM/ISO
-  fight; bridge Undermind straight into Hermes on this machine. Shape: Hermes
-  points its Ollama traffic at Undermind's proxy (:11435), plus a small
-  fail-open `undermind` sibling plugin (pattern copied from the live
-  `subconscious` plugin) feeding inputs / injecting mined intents.
+- **Hermes bridge DONE (2026-09-25, direct, no sandbox).** Proxy on :11435 now
+  serves OpenAI-compatible `/v1/models` + `/v1/chat/completions` (JSON + SSE)
+  alongside the Ollama routes, so Hermes providers speak it natively. Hermes
+  `config.yaml` flipped (backup: `config.yaml.bak-pre-undermind`): top `model:`
+  → `custom:undermind` @ `http://127.0.0.1:11435/v1`, new `providers.undermind`
+  with model `undermind-bridge` (proxy echoes the request's model name).
+  Fail-open chain in the proxy: Ollama 27B primary → Lemonade Bonsai-4B
+  fallback (different engine). Bridge plugin (`plugins/undermind/`) verified
+  live: Hermes turn recorded → daydream mined → `/api/intents` → hook
+  re-injects the signature. End-to-end `-z` turn through the flipped config
+  succeeded (uncached ~2 min on the thinking-style 27B; cached hits instant).
+  Tuning item: the intent signature miner over-generalizes — fresh inputs merge
+  into existing buckets ("bug fix login" absorbed an unrelated turn).
 - **Model hygiene rule (learned 2026-09-24):** artifacts of the abliteration
   work — e.g. the `qwen3.8-9b-distill-uncensored-heretic` gguf — are **reading
   material, not serving models**. Never wire them into a config as a working
