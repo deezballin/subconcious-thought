@@ -76,7 +76,11 @@ The stall guard correctly never fired during those long turns. Also
 hardened the bridge plugin's input feed outside the repo
 (`AppData/Local/hermes/plugins/undermind/__init__.py`: 1.0s timeout +
 1 retry — a dashboard turn had been dropped under concurrent load), loaded
-via gateway restart.
+via gateway restart. The injection probe then succeeded: a one-shot Hermes
+quoted its live undermind block verbatim, and after the plugin gained a
+per-signature cap (100 chars — one giant cron signature was starving the
+900-char block budget and truncating the other intents away) all four mined
+intents ride in every turn with their seen-counts.
 - **Hermes bridge DONE (2026-09-25, direct, no sandbox).** Proxy on :11435 now
   serves OpenAI-compatible `/v1/models` + `/v1/chat/completions` (JSON + SSE)
   alongside the Ollama routes, so Hermes providers speak it natively. Hermes
