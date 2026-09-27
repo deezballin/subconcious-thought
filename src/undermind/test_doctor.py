@@ -162,6 +162,12 @@ class TestHealthEndpoint(unittest.TestCase):
 class TestDoctorChecks(unittest.TestCase):
     def setUp(self):
         self.config = Config()
+        # Hermetic: never probe the real dashboard during tests.
+        self._orig_dash = doctor._hermes_dashboard_status
+        doctor._hermes_dashboard_status = lambda: 200
+
+    def tearDown(self):
+        doctor._hermes_dashboard_status = self._orig_dash
 
     def test_undermind_check_up_shape(self):
         original = doctor._http_json
@@ -265,6 +271,28 @@ class TestDoctorChecks(unittest.TestCase):
         finally:
             doctor._hermes_gateway_pids = original
         self.assertEqual(result["status"], "degraded")
+
+    def test_hermes_dashboard_running_shows_in_detail(self):
+        original = doctor._hermes_gateway_pids
+        doctor._hermes_gateway_pids = lambda: [(4242, 9999)]
+        try:
+            result = doctor.check_hermes_gateway(self.config)
+        finally:
+            doctor._hermes_gateway_pids = original
+        self.assertEqual(result["status"], "up")
+        self.assertIn("dashboard :9119 HTTP 200", result["detail"])
+
+    def test_hermes_dashboard_not_running_noted_not_fatal(self):
+        doctor._hermes_dashboard_status = lambda: None
+        original = doctor._hermes_gateway_pids
+        doctor._hermes_gateway_pids = lambda: [(4242, 9999)]
+        try:
+            result = doctor.check_hermes_gateway(self.config)
+        finally:
+            doctor._hermes_gateway_pids = original
+        self.assertEqual(result["status"], "up")
+        self.assertIn("not running", result["detail"])
+        self.assertIn("hermes dashboard", result["detail"])
 
     def test_hermes_durable_pair_plus_transient_reports_up(self):
         original = doctor._hermes_gateway_pids

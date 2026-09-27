@@ -10,7 +10,8 @@ Pipelines checked:
 * Lemonade      (NPU draft/fallback, :13305)  — draft model must be present
 * Undermind     (proxy, :11435)               — /api/health, incl. daydream
 * OmniRoute     (:20128)                      — 401 counts as up (auth-gated)
-* Hermes gateway(:8000 web, daemon census)    — headless daemon counts as up
+* Hermes gateway(:9119 dashboard, daemon census) — headless daemon counts as
+  up; a stopped web dashboard is noted in the detail, not an outage
 
 "Orphaned" reports *extra* instances: a second proxy listening on :11435's
 sibling, or Hermes gateway processes beyond the expected singleton. Fail-open
@@ -24,6 +25,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 from urllib.error import URLError
 from urllib.request import urlopen
 
@@ -31,7 +33,7 @@ from undermind import __version__
 from undermind.config import Config
 
 OMNIROUTE_URL = "http://127.0.0.1:20128"
-HERMES_GATEWAY_PORT = 8000
+HERMES_DASHBOARD_PORT = 9119
 
 # Files the doctor maintains for machines and the supervisor (repo-relative
 # unless made absolute elsewhere). The status file is the current census;
@@ -211,13 +213,25 @@ def check_omniroute(config: Config) -> dict:
     return {"name": "OmniRoute", "status": "degraded", "detail": f"HTTP {status}"}
 
 
-def check_hermes_gateway(config: Config) -> dict:
-    web_url = f"http://127.0.0.1:{HERMES_GATEWAY_PORT}/"
+def _hermes_dashboard_status() -> Optional[int]:
+    """HTTP status of the web dashboard (:9119), or None when not serving.
+
+    The dashboard is optional at runtime (the gateway daemons work headless),
+    so this is detection only — it never flips the check's verdict.
+    """
+    url = f"http://127.0.0.1:{HERMES_DASHBOARD_PORT}/"
     try:
-        status = _http_status(web_url)
-        web = f"web UI :{HERMES_GATEWAY_PORT} HTTP {status}"
+        return int(_http_status(url))
     except Exception:
-        web = f"web UI :{HERMES_GATEWAY_PORT} dark"
+        return None
+
+
+def check_hermes_gateway(config: Config) -> dict:
+    dash = _hermes_dashboard_status()
+    if dash is not None:
+        web = f"dashboard :{HERMES_DASHBOARD_PORT} HTTP {dash}"
+    else:
+        web = f"dashboard :{HERMES_DASHBOARD_PORT} not running"
     rows = _hermes_gateway_pids()
     if not rows:
         return {
@@ -248,6 +262,8 @@ def check_hermes_gateway(config: Config) -> dict:
     detail = f"{web}; daemon PID(s) {long_lived}"
     if transient:
         detail += f" (+ transient {transient})"
+    if dash is None:
+        detail += " (dashboard not started - run: hermes dashboard)"
     return {"name": "Hermes gateway", "status": "up", "detail": detail}
 
 
