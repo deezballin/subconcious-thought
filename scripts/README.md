@@ -9,6 +9,8 @@ sandbox window is spent watching instead of installing.
 |---|---|
 | `undermind_supervisor.ps1` | Mid-session crash supervisor: every 5 min, if :11435 is dead, relaunch the proxy detached (hidden); each tick also runs the stack doctor so `data/doctor_status.json` + `data/doctor_alerts.log` stay fresh. Singleton via a `Global\UndermindSupervisor` mutex (second copies log one line and exit). Logs to `.freebuff/supervisor.log` |
 | `undermind_supervisor.vbs` | Hidden logon launcher for the supervisor. Install: copy to `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\` (already installed) |
+| `hermes_dashboard.ps1` | Ensures the Hermes web dashboard is running on :9119 (idempotent: exits when the port already serves). Logs to `.freebuff/dashboard.log` |
+| `hermes_dashboard.vbs` | Hidden logon launcher for the dashboard. Install: copy to `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\` (already installed) |
 | `register_watchdog_task.ps1` | OPTIONAL one-click admin script: registers the `UndermindProxyWatchdog` scheduled task (every 5 min + at logon). Only needed if you prefer Task Scheduler over the Startup VBS |
 | `undermind_proxy_watchdog.ps1` | Watchdog tick used by the scheduled task: `undermind --proxy` (self-guarding no-op when the port is already serving) |
 

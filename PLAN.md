@@ -60,7 +60,12 @@ distinguished from a hung one while silent, the primary execute path now
 streams internally and `stall_timeout_s` (default 90s) bounds only the silent
 gap between tokens — long thinking turns keep emitting and are never cut.
 14 new tests cover cap semantics, real-socket stall servers for both engines,
-and config wiring; 178 green.
+and config wiring; 178 green. (5) Doctor Hermes check corrected: the web
+dashboard is `hermes dashboard` on :9119 (never auto-started; the old :8000
+probe always read "dark"), now detected explicitly — a stopped dashboard is
+noted with its start command, not treated as an outage — and the dashboard
+autostarts at logon via `scripts/hermes_dashboard.vbs` (self-guarding ps1,
+installed in Startup). 180 tests green.
 - **Hermes bridge DONE (2026-09-25, direct, no sandbox).** Proxy on :11435 now
   serves OpenAI-compatible `/v1/models` + `/v1/chat/completions` (JSON + SSE)
   alongside the Ollama routes, so Hermes providers speak it natively. Hermes
