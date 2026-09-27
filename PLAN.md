@@ -65,7 +65,18 @@ dashboard is `hermes dashboard` on :9119 (never auto-started; the old :8000
 probe always read "dark"), now detected explicitly — a stopped dashboard is
 noted with its start command, not treated as an outage — and the dashboard
 autostarts at logon via `scripts/hermes_dashboard.vbs` (self-guarding ps1,
-installed in Startup). 180 tests green.
+installed in Startup). 180 tests green. (6) Dashboard-chat drill (2026-09-27):
+drove two real chat turns through the web UI — the drill intent matured 1x →
+merged 2x → confirmed in the plugin's injection payload. The drill exposed a
+tuning truth: the 180s primary wall cap killed healthy heavy-context thinking
+turns (~20.9k-char chat prompt) at 180s and the 4B finished blind, so
+`[primary].timeout_s` is now 420s (backup: `config.toml.bak-cap-tune`) —
+the next drill turn completed on the primary at 387s, proving the new value.
+The stall guard correctly never fired during those long turns. Also
+hardened the bridge plugin's input feed outside the repo
+(`AppData/Local/hermes/plugins/undermind/__init__.py`: 1.0s timeout +
+1 retry — a dashboard turn had been dropped under concurrent load), loaded
+via gateway restart.
 - **Hermes bridge DONE (2026-09-25, direct, no sandbox).** Proxy on :11435 now
   serves OpenAI-compatible `/v1/models` + `/v1/chat/completions` (JSON + SSE)
   alongside the Ollama routes, so Hermes providers speak it natively. Hermes
