@@ -164,13 +164,18 @@ class TestHealthEndpoint(unittest.TestCase):
 
 class TestDoctorChecks(unittest.TestCase):
     def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
         self.config = Config()
+        # run_doctor writes status/alert files next to the db; keep them
+        # out of the repo's real data/ directory.
+        self.config.store.db_path = os.path.join(self.tmp.name, "x.db")
         # Hermetic: never probe the real dashboard during tests.
         self._orig_dash = doctor._hermes_dashboard_status
         doctor._hermes_dashboard_status = lambda: 200
 
     def tearDown(self):
         doctor._hermes_dashboard_status = self._orig_dash
+        self.tmp.cleanup()
 
     def test_undermind_check_up_shape(self):
         original = doctor._http_json
@@ -331,7 +336,7 @@ class TestDoctorAlerting(unittest.TestCase):
         self.config.store.db_path = os.path.join(self.tmp.name, "alert.db")
 
     def tearDown(self):
-        doctor._alert_state.clear()
+        # Alert state is file-backed inside the tmp dir; cleanup resets it.
         self.tmp.cleanup()
 
     @staticmethod
@@ -369,11 +374,43 @@ class TestDoctorAlerting(unittest.TestCase):
         log = (Path(self.tmp.name) / "doctor_alerts.log").read_text()
         self.assertIn("RECOVERED pipe0", log)
 
-    def test_dead_alerts_suppressed_within_window(self):
+    def test_repeat_dead_does_not_realert(self):
+        # Only the transition into dead fires; steady-state dead is silent.
         doctor._write_alerts(self.config, self._results("dead"), ["pipe0"])
         doctor._write_alerts(self.config, self._results("dead"), ["pipe0"])
         log = (Path(self.tmp.name) / "doctor_alerts.log").read_text()
         self.assertEqual(log.count("DEAD pipe0"), 1)
+
+    def test_degraded_and_orphaned_transitions_fire(self):
+        doctor._write_alerts(self.config, self._results("degraded"), [])
+        doctor._write_alerts(self.config, self._results("degraded"), [])
+        doctor._write_alerts(self.config, self._results("up"), [])
+        log = (Path(self.tmp.name) / "doctor_alerts.log").read_text()
+        self.assertEqual(log.count("DEGRADED pipe0"), 1)
+        self.assertEqual(log.count("RECOVERED pipe0"), 1)
+
+        doctor._write_alerts(self.config, self._results("orphaned"), [])
+        log = (Path(self.tmp.name) / "doctor_alerts.log").read_text()
+        self.assertIn("ORPHANED pipe0", log)
+
+    def test_ride_event_fires_once_per_ride(self):
+        results = [
+            {"name": "Undermind", "status": "degraded", "detail": "x - RIDING FALLBACK (primary not answering)"},
+        ]
+        doctor._write_alerts(self.config, results, [])
+        doctor._write_alerts(self.config, results, [])
+        log = (Path(self.tmp.name) / "doctor_alerts.log").read_text()
+        self.assertEqual(log.count("RIDE Undermind"), 1)
+
+        doctor._write_alerts(
+            self.config,
+            [{"name": "Undermind", "status": "up", "detail": "healthy"}],
+            [],
+        )
+        doctor._write_alerts(self.config, results, [])
+        log = (Path(self.tmp.name) / "doctor_alerts.log").read_text()
+        self.assertIn("RECOVERED Undermind", log)
+        self.assertEqual(log.count("RIDE Undermind"), 2)
 
     def test_alert_writers_fail_open(self):
         # Unwritable directory must not raise.

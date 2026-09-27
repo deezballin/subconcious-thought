@@ -41,12 +41,16 @@ HERMES_DASHBOARD_PORT = 9119
 # pipeline for SUPPRESS_S so a steady state does not spam).
 STATUS_FILE = "data/doctor_status.json"
 ALERT_LOG = "data/doctor_alerts.log"
-_DEAD_ALERT_SUPPRESS_S = 300.0
-_alert_state: dict[str, float] = {}
+# Transition memory for the alert log. File-backed (not in-memory) because
+# the supervisor runs the doctor as a fresh process each tick; state must
+# survive across ticks for DEGRADED->RECOVERED style transitions to work.
+_ALERT_STATE_FILE = "data/doctor_alert_state.json"
 
 # A median serving latency above this on the primary means the bridge is
-# effectively limping; surfaced in the Undermind check's detail.
-PRIMARY_SLOW_MS = 60_000.0
+# effectively limping; surfaced in the Undermind check's detail. Tuned from
+# 30 handoffs (2026-09-27): the 27B's MINIMUM observed turn is ~61s and p90 is
+# ~334s, so 60s flagged constantly; 300s sits above p90 and means "limping".
+PRIMARY_SLOW_MS = 300_000.0
 
 _PS_HERMES_CENSUS = (
     "Get-CimInstance Win32_Process | "
@@ -299,31 +303,58 @@ def _write_status_file(config: Config, results: list, dead: list) -> None:
 
 
 def _write_alerts(config: Config, results: list, dead: list) -> None:
-    """Append DEAD / RECOVERED transitions to the alert log.
+    """Append state transitions to the alert log (file-backed across ticks).
 
-    A pipeline already recorded dead within SUPPRESS_S does not re-alert,
-    so a supervisor ticking every few minutes does not spam the log.
+    Events: DEAD, DEGRADED, ORPHANED on entering that state, RECOVERED on
+    returning to up, and RIDE when the bridge starts riding the fallback
+    rung (from the Undermind check's RIDING FALLBACK detail). Only
+    *transitions* fire, so a supervisor ticking every few minutes does not
+    spam steady-state rows. The ``dead`` argument is kept for compatibility;
+    statuses are derived from ``results`` directly.
     """
-    if not dead and not _alert_state:
-        return
     try:
         directory = _status_dir(config)
         directory.mkdir(parents=True, exist_ok=True)
         log_path = directory / Path(ALERT_LOG).name
-        now = time.monotonic()
+        state_path = directory / Path(_ALERT_STATE_FILE).name
         stamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            if not isinstance(state, dict):
+                state = {}
+        except Exception:
+            state = {}
         details = {r["name"]: r["detail"] for r in results}
-        lines = []
-        for name in dead:
-            if now - _alert_state.get(name, 0.0) < _DEAD_ALERT_SUPPRESS_S:
-                continue
-            _alert_state[name] = now
-            lines.append(f"{stamp} DEAD {name}: {details.get(name, '')}")
-        for name in list(_alert_state):
-            if name not in dead:
-                lines.append(f"{stamp} RECOVERED {name}")
-                del _alert_state[name]
-        if lines:
+
+        events: list[tuple[str, str, str]] = []
+        for r in results:
+            name = r["name"]
+            status = str(r.get("status") or "up")
+            prev = state.get(name)
+            if status == "up":
+                if prev and prev != "up":
+                    events.append((name, "RECOVERED", ""))
+            elif prev != status:
+                kind = status.upper()  # DEAD / DEGRADED / ORPHANED
+                events.append((name, kind, str(details.get(name, ""))))
+            state[name] = status
+
+        riding = any(
+            "RIDING FALLBACK" in str(r.get("detail") or "") for r in results
+        )
+        if riding and not state.get("_riding"):
+            under = next(
+                (str(r.get("detail") or "") for r in results if r["name"] == "Undermind"),
+                "bridge riding the fallback rung",
+            )
+            events.append(("Undermind", "RIDE", under))
+        state["_riding"] = riding
+
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        if events:
+            lines = []
+            for name, kind, det in events:
+                lines.append(f"{stamp} {kind} {name}: {det}" if det else f"{stamp} {kind} {name}")
             with open(log_path, "a", encoding="utf-8") as fh:
                 fh.write("\n".join(lines) + "\n")
     except Exception:
@@ -334,8 +365,9 @@ def run_doctor(config: Config, as_json: bool = False) -> int:
     """Run all checks; print a report; return 0 iff nothing is dead.
 
     Every run also refreshes the machine-readable status file and appends
-    any new DEAD / RECOVERED transitions to the alert log, so a supervisor
-    or dashboard can surface outages without a human running this.
+    any new state transitions (DEAD / DEGRADED / ORPHANED / RECOVERED /
+    fallback RIDE) to the alert log, so a supervisor or dashboard can
+    surface outages without a human running this.
     """
     results = []
     for check in CHECKS:

@@ -1,0 +1,6 @@
+name: undermind
+version: "0.1.0"
+description: "Undermind bridge — feeds prompts to the local Undermind pipeline (:11435) so its daydream loop mines repeated intents, and surfaces those intents back as gentle context. Fail-open: if Undermind is unreachable, Hermes proceeds normally."
+author: "Dewayne & Kairos (Undermind seat)"
+hooks:
+  - pre_llm_call

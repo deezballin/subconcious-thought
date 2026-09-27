@@ -80,7 +80,21 @@ via gateway restart. The injection probe then succeeded: a one-shot Hermes
 quoted its live undermind block verbatim, and after the plugin gained a
 per-signature cap (100 chars — one giant cron signature was starving the
 900-char block budget and truncating the other intents away) all four mined
-intents ride in every turn with their seen-counts.
+intents ride in every turn with their seen-counts. (7) Cap tuning from 30
+real handoffs (2026-09-27): 27B min 61s / p50 165s / p90 334s / max 387s —
+`[primary].timeout_s` raised 420→600 (the stall guard, proven twice live,
+keeps hangs cheap so the wall cap only stops killing deep thinking turns);
+`fallback_timeout_s` 60 and `stall_timeout_s` 90 confirmed by data (4B work
+never exceeded ~31s; stall trips landed ~90s). Doctor PRIMARY_SLOW_MS raised
+60s→300s: the 27B's minimum turn exceeds the old bar, so "primary slow" was
+meaningless. (8) Alert log upgraded to full transition coverage — DEAD,
+DEGRADED, ORPHANED on entering, RECOVERED on returning, RIDE when the bridge
+starts riding the fallback rung — with transition memory now file-backed
+(`data/doctor_alert_state.json`) because the supervisor's per-tick doctor
+processes would otherwise reset state and spam. The bridge plugin is
+version-controlled in-repo under `hermes_plugin/` (deploy: copy to the
+Hermes plugins dir + gateway restart; see hermes_plugin/README.md).
+182 tests green.
 - **Hermes bridge DONE (2026-09-25, direct, no sandbox).** Proxy on :11435 now
   serves OpenAI-compatible `/v1/models` + `/v1/chat/completions` (JSON + SSE)
   alongside the Ollama routes, so Hermes providers speak it natively. Hermes
