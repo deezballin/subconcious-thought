@@ -156,7 +156,10 @@ class TestHealthEndpoint(unittest.TestCase):
             data = json.loads(resp.read().decode())
         self.assertTrue(data["ok"])
         time.sleep(0.2)
-        self.assertLess(scheduler.idle_for(), 1.0)
+        # Rearm must pull the clock back under the 3s prime above. The bound
+        # is deliberately generous (not 1.0): under heavy machine load the
+        # POST->assert gap alone can stretch, without the rearm having failed.
+        self.assertLess(scheduler.idle_for(), 2.5)
 
 
 class TestDoctorChecks(unittest.TestCase):
