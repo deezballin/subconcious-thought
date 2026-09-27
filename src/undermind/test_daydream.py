@@ -131,6 +131,50 @@ class TestDaydreamCycle(unittest.TestCase):
         self.assertIsNotNone(result)
 
 
+class TestSystemPromptFiltering(unittest.TestCase):
+    """Machine-authored envelopes are consumed, never mined."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = UndermindStore(os.path.join(self.tmp.name, "sys.db"))
+        self.exporter = Exporter(self.store, os.path.join(self.tmp.name, "exp.jsonl"))
+
+    def tearDown(self):
+        self.store.close()
+        self.tmp.cleanup()
+
+    def _worker(self) -> DaydreamWorker:
+        return DaydreamWorker(
+            store=self.store,
+            exporter=self.exporter,
+            idle_threshold_s=5.0,
+            min_intent_count=1,
+            max_samples_per_intent=10,
+        )
+
+    def test_cron_text_is_consumed_without_mining(self):
+        worker = self._worker()
+        self.store.record_input(
+            "[IMPORTANT: You are running as a scheduled cron job. DELIVERY: post]"
+        )
+        result = worker.run_cycle()
+        self.assertEqual(result.inputs_processed, 1)
+        self.assertEqual(result.intents_updated, 0)
+        self.assertEqual(self.store.list_intents(min_count=1), [])
+
+    def test_human_text_still_mines_alongside_cron(self):
+        worker = self._worker()
+        self.store.record_input(
+            "[IMPORTANT: You are running as a scheduled cron job. DELIVERY: post]"
+        )
+        self.store.record_input("remember the bridge dashboard drill")
+        result = worker.run_cycle()
+        self.assertEqual(result.inputs_processed, 2)
+        intents = self.store.list_intents(min_count=1)
+        self.assertEqual(len(intents), 1)
+        self.assertIn("drill", intents[0]["signature"])
+
+
 class TestNearDuplicateMerge(unittest.TestCase):
     """Near-duplicate intents fold into one bucket when merging is enabled."""
 

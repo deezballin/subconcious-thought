@@ -184,6 +184,22 @@ class TestStoreMerge(unittest.TestCase):
         self.assertEqual(merged["exported_at_ms"], 1000)
         self.assertEqual(merged["export_count"], 8)
 
+    def test_delete_intent_removes_samples_unlinks_inputs(self):
+        id_a, input_a = self._seed("alpha beta gamma")
+        self.assertTrue(self.store.delete_intent(id_a))
+        self.assertIsNone(self.store.get_intent(id_a))
+        self.assertEqual(
+            self.store._conn.execute(
+                "SELECT COUNT(*) FROM intent_samples WHERE intent_id = ?", (id_a,)
+            ).fetchone()[0],
+            0,
+        )
+        row = self.store._conn.execute(
+            "SELECT intent_id FROM inputs WHERE id = ?", (input_a,)
+        ).fetchone()
+        self.assertIsNone(row["intent_id"])
+        self.assertFalse(self.store.delete_intent(id_a))
+
     def test_merge_missing_rows_are_noops(self):
         id_a, _ = self._seed("alpha beta gamma")
         self.assertEqual(self.store.merge_intent(id_a, id_a), 1)

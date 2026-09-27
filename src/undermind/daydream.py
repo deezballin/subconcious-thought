@@ -15,7 +15,7 @@ import time
 from typing import Callable, List, Optional
 
 from undermind.exporter import Exporter
-from undermind.intents import find_similar_intent
+from undermind.intents import find_similar_intent, is_system_prompt
 from undermind.intents import intent_id as compute_intent_id
 from undermind.intents import signature as compute_signature
 from undermind.store import UndermindStore
@@ -174,6 +174,12 @@ class DaydreamWorker:
         for row in unprocessed:
             text = row["text"]
             if not text or not text.strip():
+                processed_ids.append(row["id"])
+                continue
+            if is_system_prompt(text):
+                # Machine-authored envelope (cron template, continuation
+                # context, injected blocks): never a direction the human
+                # asked for. Consumed without mining.
                 processed_ids.append(row["id"])
                 continue
             sig = compute_signature(text)

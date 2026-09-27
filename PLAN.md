@@ -94,7 +94,17 @@ starts riding the fallback rung — with transition memory now file-backed
 processes would otherwise reset state and spam. The bridge plugin is
 version-controlled in-repo under `hermes_plugin/` (deploy: copy to the
 Hermes plugins dir + gateway restart; see hermes_plugin/README.md).
-182 tests green.
+(9) Miner hygiene (2026-09-27): machine-authored prompt envelopes (the cron
+template, interrupted-context continuations, injected undermind/subconscious
+blocks) were being mined as "directions the human keeps asking" — the cron
+template had grown to count 8 and dominated the injection payload.
+`intents.is_system_prompt` (conservative marker list) now consumes such texts
+without mining, `store.delete_intent` removes samples and unlinks inputs,
+and the live store was purged of system-only intents: the payload the model
+sees is now purely human (bug fix login 6x, bridge smoke test 3x, bridge
+dashboard drill remember 2x). 188 tests green (one load-sensitive flake
+remains: a single suite failure observed only immediately after multi-minute
+live Ollama turns; the captured instance is fixed in b129d35).
 - **Hermes bridge DONE (2026-09-25, direct, no sandbox).** Proxy on :11435 now
   serves OpenAI-compatible `/v1/models` + `/v1/chat/completions` (JSON + SSE)
   alongside the Ollama routes, so Hermes providers speak it natively. Hermes

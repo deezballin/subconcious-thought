@@ -83,7 +83,23 @@ class TestGrouping(unittest.TestCase):
         self.assertFalse(is_repeat("delete the database", seen))
 
 
-from undermind.intents import find_similar_intent, jaccard_similarity
+from undermind.intents import find_similar_intent, is_system_prompt, jaccard_similarity
+
+
+class TestSystemPromptDetection(unittest.TestCase):
+    def test_cron_envelope_detected(self):
+        self.assertTrue(
+            is_system_prompt(
+                "[IMPORTANT: You are running as a scheduled cron job. DELIVERY: ..."
+            )
+        )
+
+    def test_human_text_not_flagged(self):
+        self.assertFalse(is_system_prompt("remember the bridge dashboard drill"))
+        self.assertFalse(is_system_prompt("fix the login bug please"))
+
+    def test_empty_not_flagged(self):
+        self.assertFalse(is_system_prompt(""))
 
 
 class TestSimilarity(unittest.TestCase):

@@ -196,6 +196,28 @@ class UndermindStore:
             )
             self._conn.commit()
 
+    def delete_intent(self, intent_id: str) -> bool:
+        """Remove an intent and its samples; returns True if a row was removed.
+
+        Sample rows are deleted (they would be orphans); inputs that pointed
+        at the intent keep their text and get intent_id = NULL instead.
+        No-op (False) when the intent does not exist.
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM intent_samples WHERE intent_id = ?", (intent_id,)
+            )
+            samples = cur.rowcount
+            self._conn.execute(
+                "UPDATE inputs SET intent_id = NULL WHERE intent_id = ?",
+                (intent_id,),
+            )
+            cur = self._conn.execute(
+                "DELETE FROM intents WHERE intent_id = ?", (intent_id,)
+            )
+            self._conn.commit()
+            return bool(samples or cur.rowcount)
+
     def dedupe_intent_samples(self) -> int:
         """Remove duplicate (intent_id, input_id) sample rows; returns removed.
 

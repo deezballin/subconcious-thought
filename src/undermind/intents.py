@@ -38,6 +38,29 @@ _WHITESPACE_RE = re.compile(r"\s+")
 _MIN_STEM_LEN = 3
 _MIN_WORD_LEN = 2
 
+# Machine-authored prompt templates should never become "directions the human
+# keeps asking". Matched case-insensitively against the RAW text; each entry
+# is a conservative marker that only appears in machine-generated envelopes.
+_SYSTEM_MARKERS = (
+    "[important: you are running as a scheduled cron job",
+    "[context from the interrupted assistant response",
+    "you are kairos (inside hermes). refresh a continui",
+    "<undermind private=",
+    "<subconscious private=",
+)
+
+
+def is_system_prompt(text: str) -> bool:
+    """True when the text looks machine-authored rather than human.
+
+    Conservative: only known template markers match, so unusual-but-human
+    phrasings are never silently dropped from mining.
+    """
+    if not text:
+        return False
+    lowered = text.lower()
+    return any(marker in lowered for marker in _SYSTEM_MARKERS)
+
 
 def normalize_text(text: str) -> str:
     """Unicode-normalize and lowercase the raw input."""
