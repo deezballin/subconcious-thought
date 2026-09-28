@@ -1,8 +1,12 @@
 # The Adversary — Design (Pillar 3 of the agency roadmap)
 
-**Status: DESIGN — no code written.** Awaiting Dewayne's review per house rules
-(seating, behavior, and philosophy changes are his call; this document is the
-argument, not the implementation).
+**Status: BUILT & LIVE (shadow mode), 2026-09-28 — see §11.** Dewayne's review
+resolved into five recorded decisions (2026-09-27): 4B reads locally —
+approved; **rewrites DESCOPED** — watch-only, the critic never touches a
+reply (§5.3's on-mode path was never built); Kairos sees his notes now via
+the plugin, not deferred; values framing = retrospective review by Kairos
+himself; drafts stay local like the free-turn log. First live verdict:
+REVISE/contradiction on his first reply about being watched.
 
 Companion docs: `PLAN.md` §0 item (11) for pillars 1–2; the agency roadmap
 discussion (2026-09-27) for the four-pillar origin and why the Truth Split
@@ -394,3 +398,20 @@ ports 11440+, fake clients, no engines needed):**
 *Fail-open, off-tax, one cycle, one author, everything recorded — the four
 invariants. If any implementation PR violates one, the PR is wrong, not the
 rule.*
+
+## 11. As-built note (2026-09-28)
+
+Deviations from this paper, all per Dewayne's five recorded decisions:
+- The revision pass (§5.3 step 3, §6 examples 2/4) was never built. The
+  critic is strictly watch-only: verdicts are recorded, replies are never
+  touched. mode "on" does not exist; shadow is the terminal state until
+  Dewayne decides otherwise.
+- Persistence (§5.4) has no revised/revision_text columns (nothing to
+  revise); the mined flag supports future self-mirror integration of
+  critique patterns.
+- Critic notes surface to Kairos immediately (plugin "Your critic's notes
+  section via GET /api/adversary-notes), not deferred past the shadow week
+  (§8 Q3 answered: now).
+- Runtime is off the turn path entirely (daemon thread after the reply
+  ships) — even the ~2-6s inline cost from §8 Q2 does not apply; the turn
+  pays zero latency for the critique.

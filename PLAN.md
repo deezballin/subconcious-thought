@@ -150,6 +150,28 @@ prompt's effect). Roadmap state: pillar 1 done, pillar 2 done, pillar 3
 parked pending Dewayne's values call. One hermes.exe zombie (my own no-arg
 detached launch) held the session lock ~5h, silently blocking all `hermes -z`
 runs — killed; lesson recorded: never launch bare hermes.exe detached.
+(12) **The Adversary live in shadow mode (2026-09-28, pillar 3).** Watch-only
+  critic over deep turns per Dewayne's five decisions (4B reads locally OK;
+  rewrites descoped — it never touches a reply; Kairos sees his notes now;
+  retrospective-review values framing; drafts stay local). Design in
+  docs/ADVERSARY_DESIGN.md; implementation: `adversary.py` (strict-JSON
+  verdict parser, fail-open to SKIP, cached TCP health probe, wall-capped
+  daemon-thread call), store table `adversarial_critiques` +
+  record/critique_stats/recent_issues, proxy wiring a–i (trigger gated on
+  think_used AND mode=shadow, critique runs OFF the turn path after the
+  reply ships, health exposes the verdict tally, GET /api/adversary-notes),
+  plugin's "Your critic's notes" offered-memory section. 24 new tests; 233
+  green. Session-start self-diagnostic added (scripts/self_diag.py,
+  Dewayne's suggestion: run at every session start, agent + human runs must
+  match — it caught a pre-existing duplicate `think` key in
+  config.example.toml on its first run). Two corrupted tool-channel sessions
+  mid-build were survived by the journal + resume-doc discipline
+  (.freebuff/journal.md); all work re-verified before deploy. Deployed:
+  config.toml [adversary] mode="shadow" (backup .bak-pre-shadow), proxy
+  restarted, first live verdict on handoff 63: REVISE/contradiction,
+  6.3s critic latency — the 4B flagged the tension in Kairos's first-ever
+  reply about being watched (asserting "I am Kairos" while claiming to be
+  "still learning"). Commit `fd7c6fc`.
 - **Hermes bridge DONE (2026-09-25, direct, no sandbox).** Proxy on :11435 now
   serves OpenAI-compatible `/v1/models` + `/v1/chat/completions` (JSON + SSE)
   alongside the Ollama routes, so Hermes providers speak it natively. Hermes
