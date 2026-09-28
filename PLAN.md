@@ -168,6 +168,14 @@ themes section, so Kairos may disagree with its own memory. 192 tests green.
   verified serving models (Lemonade `/v1/models` ground truth: only
   Bonsai-1.7B-Q1_0, Bonsai-4B-Q1_0, smol_llama-101m-gqa.q2_k serve there).
   Backups: `config.yaml.bak-pre-undermind`, `config.yaml.bak-pre-heretic-fix`.
+  Hardware note (2026-09-27, Dewayne): the NPU's one clear strength is
+  **fluid memory** — RAM switches to VRAM as needed — which is why the
+  Lemonade rung (Bonsai-1.7B/4B) replies in seconds. The 27B on Ollama has
+  `size_vram: 0` (no discrete GPU; integrated Radeon is 512MB, DisplayLink
+  devices are USB display chips) so it runs CPU-only with a ~100s floor per
+  thinking turn; that floor is the cost of the seat's current depth, not a
+  regression. Any move of the 27B onto the NPU stack = seating change,
+  needs Dewayne's explicit go + verification.
 - VM/ISO sandbox track: **parked** (2026-09-24) after three installer
   generations fought back. Lessons preserved in docs/VM_CHECKLIST.md (netboot
   is a downloader; corrupt 26.04.1 mini iso — tail zeros; the npu-folder
