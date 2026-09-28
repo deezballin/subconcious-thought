@@ -52,6 +52,21 @@ stall_timeout_s = 90.0
 # Deep but slow; false replies directly - several times faster, slightly
 # shallower. Speed-vs-depth is a config flip, not a model change.
 think = true
+# Per-turn think routing: cron/auxiliary requests never think (they were
+# never asked to deliberate); an explicit "think hard" in the message forces
+# it on. With adaptive_think on, turns matching a matured routine intent
+# (seen >= routine_threshold times) skip thinking and novel turns get it -
+# matched semantically (embedding distance via the Memory Mine) with a
+# jaccard fallback when the memory backend is unavailable.
+adaptive_think = false
+routine_threshold = 3
+# Cosine-similarity bar for the semantic routine match (higher = stricter:
+# more turns count as novel and deliberate).
+routine_similarity = 0.72
+# Ollama only: keep the model's hidden reasoning ("thinking") enabled.
+# Deep but slow; false replies directly - several times faster, slightly
+# shallower. Speed-vs-depth is a config flip, not a model change.
+think = true
 
 [daydream]
 # The daydream worker runs only after this much complete pipeline idle time.
