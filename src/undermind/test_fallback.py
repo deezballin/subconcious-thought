@@ -377,9 +377,18 @@ class TestStallGuard(unittest.TestCase):
         )
         payload = provider._payload("p", stream=True)
         self.assertIs(payload["think"], False)
-        self.assertIn("options", payload)  # stall-guard branch intact
+        self.assertNotIn("options", payload)  # stall disabled -> no logprobs
         plain = provider._payload("p", stream=False)
         self.assertIs(plain["think"], False)
+
+        # With the stall guard on, the streaming payload keeps logprobs.
+        guarded = OllamaNativeProvider(
+            base_url="http://127.0.0.1:1/",
+            model="m",
+            stall_timeout_s=5.0,
+            think=False,
+        )
+        self.assertIn("options", guarded._payload("p", stream=True))
 
         deep = OllamaNativeProvider(base_url="http://127.0.0.1:1/", model="m")
         self.assertIs(deep._payload("p", stream=False)["think"], True)
