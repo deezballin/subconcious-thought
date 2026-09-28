@@ -107,6 +107,36 @@ class DaydreamConfig:
 
 
 @dataclass
+class AdversaryConfig:
+    """The Adversary: a critic that reviews deep turns after they complete.
+
+    Per Dewayne's decisions (2026-09-27): watch-only — the critic records
+    opinions on deep (think_used=true) turns but NEVER rewrites or blocks a
+    reply; Kairos's failure patterns surface to him as offered memory. The
+    seat is the seated NPU 4B (no new model); everything stays local.
+
+    mode: "off" = fully inert (no calls, no rows); "shadow" = record
+    critiques after the reply ships; "on" is not offered in this build —
+    the rewrite path from the design doc was descoped.
+    """
+
+    mode: str = "off"
+    kind: str = "openai_compat"
+    base_url: str = "http://localhost:13305"
+    model: str = "Bonsai-4B-Q1_0"
+    api_key: str = ""
+    timeout_s: float = 20.0
+    max_draft_chars: int = 4000
+    min_draft_chars: int = 200
+    user_chars: int = 500
+    temperature: float = 0.2
+    max_tokens: int = 160
+    # Cached health check before a critic call: when the seat is down, deep
+    # turns skip the attempt entirely instead of paying the timeout.
+    health_cache_s: float = 60.0
+
+
+@dataclass
 class StoreConfig:
     """SQLite persistence settings."""
 
@@ -130,6 +160,7 @@ class Config:
     confidence: ConfidenceConfig = field(default_factory=ConfidenceConfig)
     primary: PrimaryConfig = field(default_factory=PrimaryConfig)
     daydream: DaydreamConfig = field(default_factory=DaydreamConfig)
+    adversary: AdversaryConfig = field(default_factory=AdversaryConfig)
     store: StoreConfig = field(default_factory=StoreConfig)
     proxy: ProxyConfig = field(default_factory=ProxyConfig)
     source_path: str | None = None
@@ -140,6 +171,7 @@ _SECTION_TYPES = {
     "confidence": ConfidenceConfig,
     "primary": PrimaryConfig,
     "daydream": DaydreamConfig,
+    "adversary": AdversaryConfig,
     "store": StoreConfig,
     "proxy": ProxyConfig,
 }

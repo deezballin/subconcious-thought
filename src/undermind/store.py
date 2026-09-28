@@ -102,6 +102,24 @@ CREATE TABLE IF NOT EXISTS assistant_intent_samples (
     ts_ms INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_asst_samples_intent ON assistant_intent_samples(intent_id);
+
+-- The Adversary (shadow mode): watch-only critic verdicts on deep turns.
+-- Per Dewayne's decisions: records opinions AFTER the reply ships; never
+-- rewrites, blocks, or gates anything. Local-only data (same handling as
+-- the free-turn log).
+CREATE TABLE IF NOT EXISTS adversarial_critiques (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    handoff_id INTEGER,
+    ts_ns INTEGER NOT NULL,
+    mode TEXT NOT NULL,
+    verdict TEXT NOT NULL,
+    category TEXT,
+    issue TEXT,
+    draft_text TEXT,
+    critic_latency_ms REAL,
+    mined INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_adv_handoff ON adversarial_critiques(handoff_id);
 """
 
 
@@ -446,6 +464,67 @@ class UndermindStore:
                     "SELECT COUNT(*) AS n FROM handoffs"
                 ).fetchone()
             return int(row["n"])
+
+    # ------------------------------------------------------------------
+    # adversarial critiques (shadow-mode watch log)
+    # ------------------------------------------------------------------
+
+    def record_critique(
+        self,
+        handoff_id: Optional[int],
+        mode: str,
+        verdict: str,
+        category: Optional[str] = None,
+        issue: Optional[str] = None,
+        draft_text: Optional[str] = None,
+        critic_latency_ms: Optional[float] = None,
+    ) -> int:
+        """Record one watch-only critic verdict on a completed deep turn."""
+        with self._lock:
+            cursor = self._conn.execute(
+                "INSERT INTO adversarial_critiques (handoff_id, ts_ns, mode,"
+                " verdict, category, issue, draft_text, critic_latency_ms)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    handoff_id,
+                    time.time_ns(),
+                    mode,
+                    verdict,
+                    category,
+                    issue,
+                    draft_text,
+                    critic_latency_ms,
+                ),
+            )
+            self._conn.commit()
+            return int(cursor.lastrowid)
+
+    def critique_stats(self, window: int = 30) -> dict:
+        """Verdict tally over the most recent ``window`` critiques."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT verdict, COUNT(*) AS n FROM"
+                " (SELECT verdict FROM adversarial_critiques"
+                "  ORDER BY id DESC LIMIT ?) GROUP BY verdict",
+                (int(window),),
+            ).fetchall()
+        tally = {r["verdict"]: int(r["n"]) for r in rows}
+        return {
+            "recent": sum(tally.values()),
+            "ok": tally.get("OK", 0),
+            "revise": tally.get("REVISE", 0),
+            "skip": tally.get("SKIP", 0),
+        }
+
+    def recent_issues(self, limit: int = 3) -> List[sqlite3.Row]:
+        """Most recent REVISE critiques with a named category and issue."""
+        with self._lock:
+            return self._conn.execute(
+                "SELECT category, issue, ts_ns FROM adversarial_critiques"
+                " WHERE verdict = 'REVISE' AND category IS NOT NULL"
+                " ORDER BY id DESC LIMIT ?",
+                (int(limit),),
+            ).fetchall()
 
     def latest_handoff(self) -> Optional[sqlite3.Row]:
         """The most recent handoff record, or None."""

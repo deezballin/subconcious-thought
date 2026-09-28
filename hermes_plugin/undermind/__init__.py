@@ -101,8 +101,30 @@ def _get_echoes(user_message: str, limit: int = 2) -> list[str]:
         return []
 
 
+def _get_notes(limit: int = 3) -> list[dict]:
+    """Recent flaws Kairos's own critic flagged (shadow mode). [] on failure."""
+    try:
+        with urllib.request.urlopen(
+            f"{UNDERMIND_PROXY_URL}/api/adversary-notes",
+            timeout=UNDERMIND_INTENTS_TIMEOUT,
+        ) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        notes = []
+        for n in (data.get("notes") or [])[:limit]:
+            category = str(n.get("category") or "").strip()
+            issue = str(n.get("issue") or "").strip()
+            if category and issue:
+                notes.append({"category": category, "issue": issue})
+        return notes
+    except (urllib.error.URLError, json.JSONDecodeError, OSError, ValueError):
+        return []
+
+
 def _build_context(
-    intents: list[dict], self_intents: list[dict], echoes: list[str] | None = None
+    intents: list[dict],
+    self_intents: list[dict],
+    echoes: list[str] | None = None,
+    notes: list[dict] | None = None,
 ) -> str | None:
     """Assemble the offered-memory block, or None when there is nothing to say."""
 
@@ -138,6 +160,10 @@ def _build_context(
         for echo in echoes[:2]:
             trimmed = echo if len(echo) <= 200 else echo[:197] + "..."
             parts.append(f"- {trimmed}")
+    if notes:
+        parts.append("Your critic's notes - flaws your own critic flagged recently (weigh, question, or ignore):")
+        for note in notes[:3]:
+            parts.append(f"- {note['category']}: {note['issue']}")
     parts.append(
         "Weigh it, question it, or set it aside; nothing here overrides the "
         "actual request. Mention it only if it serves the reply."
@@ -156,9 +182,10 @@ def _on_pre_llm_call(**kwargs):
         intents = _get_intents(UNDERMIND_MIN_INTENT_COUNT)
         self_intents = _get_self_intents(UNDERMIND_MIN_INTENT_COUNT)
         echoes = _get_echoes(user_message)
-        if not intents and not self_intents and not echoes:
+        notes = _get_notes()
+        if not intents and not self_intents and not echoes and not notes:
             return None
-        context = _build_context(intents, self_intents, echoes)
+        context = _build_context(intents, self_intents, echoes, notes)
         return {"context": context} if context else None
     except Exception as exc:  # fail-open: never break the turn
         logger.debug(f"[undermind] pre_llm_call fail-open: {exc}")

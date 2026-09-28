@@ -40,6 +40,7 @@ from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
 from undermind import __version__
+from undermind.adversary import Adversary
 from undermind.config import Config, load_config
 from undermind.confidence import ConfidenceTracker
 from undermind.daydream import DaydreamWorker
@@ -217,6 +218,8 @@ class UndermindProxy(BaseHTTPRequestHandler):
             self._handle_echoes()
         elif path == "/api/health":
             self._handle_health()
+        elif path == "/api/adversary-notes":
+            self._handle_adversary_notes()
         elif path == "/v1/models":
             self._handle_v1_models()
         else:
@@ -326,6 +329,22 @@ class UndermindProxy(BaseHTTPRequestHandler):
         ]
         self._send_json({"self_intents": intents})
 
+    def _handle_adversary_notes(self) -> None:
+        """GET /api/adversary-notes — recent flaws the critic flagged.
+
+        Surfaced to Kairos as offered memory (plugin), never as instruction;
+        he is free to weigh, question, or ignore them."""
+        rows = self.store.recent_issues(3)
+        notes = [
+            {
+                "category": r["category"],
+                "issue": r["issue"],
+                "ts_ns": r["ts_ns"],
+            }
+            for r in rows
+        ]
+        self._send_json({"notes": notes})
+
     def _handle_health(self) -> None:
         """GET /api/health — one-stop status for the doctor and watchdogs."""
         scheduler = getattr(self, "daydream_scheduler", None)
@@ -345,6 +364,10 @@ class UndermindProxy(BaseHTTPRequestHandler):
                 "reflections": self.memory.count() if self.memory else 0,
                 "daydream": scheduler.status() if scheduler else None,
                 "serving": self._serving_summary(),
+                "adversary": {
+                    "mode": self.config.adversary.mode,
+                    "stats": self.store.critique_stats(30),
+                },
             }
         )
 
@@ -511,6 +534,9 @@ class UndermindProxy(BaseHTTPRequestHandler):
                     "confidence_crossed": meta["crossed"],
                     "confidence": meta["confidence"],
                     "latency_ms": meta["latency_ms"],
+                    "think_used": meta.get("think_used"),
+                    "think_reason": meta.get("think_reason"),
+                    "adversary": meta.get("adversary"),
                 }
             )
         if openai:
@@ -730,7 +756,7 @@ class UndermindProxy(BaseHTTPRequestHandler):
             served_provider, served_model, served_latency_ms or latency_ms
         )
 
-        self.store.record_handoff(
+        handoff_id = self.store.record_handoff(
             trigger="proxy_confidence_cross" if crossed else "proxy_direct",
             branch=branch,
             provider=served_provider,
@@ -747,8 +773,19 @@ class UndermindProxy(BaseHTTPRequestHandler):
             self.store.record_output(result)
         except Exception:
             pass
+        # The Adversary (watch-only, shadow mode): critique the completed
+        # turn OFF the turn path — a daemon thread; the reply already went
+        # out. Never rewrites, never blocks; worst case is a SKIP row.
+        adversary_meta = None
+        adversary = getattr(self, "adversary", None)
+        if adversary is not None and adversary.enabled and think_used:
+            adversary.review_async(prompt, result, handoff_id)
+            adversary_meta = "review_started"
         return {
             "response": result,
+            "think_used": think_used,
+            "think_reason": think_reason,
+            "adversary": adversary_meta,
             "crossed": crossed,
             "confidence": confidence,
             "latency_ms": latency_ms,
@@ -911,6 +948,9 @@ class ProxyServer:
             poll_interval_s=self.config.daydream.poll_interval_s,
         )
         self.recent_serving: deque = deque(maxlen=30)
+        # Watch-only critic (shadow mode): reviews deep turns after they
+        # ship. Inert unless [adversary].mode == "shadow".
+        self.adversary = Adversary(store=self.store, config=self.config)
         self._server: Optional[ThreadingHTTPServer] = None
 
     def start(self) -> None:
@@ -966,6 +1006,7 @@ class ProxyServer:
         _scheduler = self.daydream_scheduler
         _recent_serving = self.recent_serving
         _memory = self.memory
+        _adversary = self.adversary
 
         class ProxyHandler(UndermindProxy):
             cache = _cache
@@ -978,6 +1019,7 @@ class ProxyServer:
             daydream_scheduler = _scheduler
             recent_serving = _recent_serving
             memory = _memory
+            adversary = _adversary
 
         return ProxyHandler
 

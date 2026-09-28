@@ -63,10 +63,6 @@ routine_threshold = 3
 # Cosine-similarity bar for the semantic routine match (higher = stricter:
 # more turns count as novel and deliberate).
 routine_similarity = 0.72
-# Ollama only: keep the model's hidden reasoning ("thinking") enabled.
-# Deep but slow; false replies directly - several times faster, slightly
-# shallower. Speed-vs-depth is a config flip, not a model change.
-think = true
 
 [daydream]
 # The daydream worker runs only after this much complete pipeline idle time.
@@ -76,6 +72,21 @@ min_intent_count = 2
 export_path = "data/training_export.jsonl"
 poll_interval_s = 0.5
 max_samples_per_intent = 20
+
+# The Adversary: a watch-only critic over completed deep turns (pillar 3).
+# The seat is the seated NPU 4B (no new model); it reviews a turn AFTER the
+# reply ships and records a verdict (OK / REVISE + one-sentence issue / SKIP).
+# Per Dewayne's decision it NEVER rewrites or blocks a reply — shadow mode
+# only. Recent REVISE notes surface to the assistant as offered memory via
+# /api/adversary-notes. mode "off" = fully inert (the shipped default).
+[adversary]
+mode = "off"
+kind = "openai_compat"
+base_url = "http://localhost:13305"
+model = "Bonsai-4B-Q1_0"
+timeout_s = 20.0
+min_draft_chars = 200
+max_draft_chars = 4000
 
 [store]
 db_path = "data/undermind.db"
