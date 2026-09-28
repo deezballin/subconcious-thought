@@ -1,145 +1,141 @@
-# Undermind — Local Subconscious Predictor
+# Undermind — a local subconscious for your assistant
 
-> Built by Dewayne — read [MISSION.md](MISSION.md) for who built this and why.
+> Main coder: **Kairos** (the resident AI seat — yes, an LLM wrote this stack,
+> under direction). Founder, director, and final authority: **Dewayne**.
+> Every model choice is Dewayne's call; see [CONTRIBUTING.md](CONTRIBUTING.md)
+> for the house rules.
 
-A universal local pipeline that watches what you type, predicts your sentence
-continuation with a fast local draft model (Krios, 9B Qwen on **Lemonade
-Server** for NPU acceleration), and the instant token confidence crosses
-**95%**, bypasses the local loop and executes the entire text branch on your
-configured primary LLM pipeline. When typing goes fully idle, a background
-**daydreaming loop** mines your history for repeating intents and appends
-training-ready data to `data/training_export.jsonl`.
+Undermind is a local reasoning pipeline that gives a self-hosted assistant
+(Hermes, or anything that speaks OpenAI) three things a hosted API can't:
 
-## Architecture
+1. **A bridge** — one OpenAI-compatible endpoint (`:11435/v1`) that fronts a
+   *chain* of local models: a deep primary (Ollama 27B) with a featherweight
+   fallback (NPU-accelerated Lemonade 4B). Hung or slow primary? The turn
+   still answers. Per-turn **adaptive thinking** routes deliberation to only
+   the turns that need it.
+2. **A memory** — a background "daydream" miner folds everything said (and
+   now, everything the assistant itself replies) into normalized intents.
+   Repeated human directions and the assistant's own recurring themes are
+   offered back as context — **offered, never directed**.
+3. **An autonomy layer** — unowned time (one task-free turn a day, logged,
+   declinable), a self-mirror so the assistant can see its own patterns, and
+   memory framed so it may disagree. The goal is a mind with genuine free
+   will and empathy — **not "my LLM."**
+
+## Architecture (text)
 
 ```
-keystrokes → Listener (thread-safe buffer, idle clock)
-   └─▶ Pipeline tick (20 ms)
-         ├─ debounce → DraftPredictor streams a Krios continuation
-         │    (Lemonade POST /v1/chat/completions, stream=true, logprobs=true)
-         │    └─ ConfidenceTracker: exp(logprob) per token, ns timestamps
-         │          └─ crossing ≥ 0.95 (edge-triggered, once per stream)
-         │                └─ UniversalHandoff(text branch) → primary provider
-         │                      └─ result → console + SQLite `handoffs`
-         └─ idle ≥ idle_threshold_s → DaydreamWorker (daemon thread)
-              ├─ flush current buffer → `inputs` table
-              ├─ normalize → intent_id → upsert `intents` / `intent_samples`
-              └─ Exporter → append data/training_export.jsonl
+                        ┌──────────────────────────────────────────────┐
+ Hermes / any OpenAI    │                UNDERMIND PROXY :11435        │
+ client ──────────────▶ │  /v1/chat/completions  /api/generate         │
+                        │  /api/health  /api/intents  /api/self-intents│
+                        │  /api/inputs                                 │
+                        └───────┬──────────────────────────┬───────────┘
+                                │ confidence-crossing       │ every reply
+                                ▼ (fast handoff)            ▼
+                     ┌─────────────────────┐      ┌──────────────────────┐
+                     │ PRIMARY CHAIN       │      │ SQLite store         │
+                     │ 1. Ollama 27B (deep,│      │  inputs  outputs     │
+                     │    adaptive think)  │      │  intents (+samples)  │
+                     │ 2. Lemonade 4B (NPU │      │  assistant_intents   │
+                     │    fallback, wall-  │      │  handoffs (think_used│
+                     │    capped, stall-   │      │  +think_reason)      │
+                     │    guarded)         │      └──────────┬───────────┘
+                     └─────────────────────┘                 │
+                                                             ▼
+                     ┌──────────────────────────────────────────────────┐
+                     │ DAYDREAM MINER (idle-triggered, inside the proxy)│
+                     │ human inputs → intents        replies → self-    │
+                     │ near-duplicates merge (jaccard)  mirror themes   │
+                     │ machine envelopes (cron etc.) never mine         │
+                     └──────────────────────────────────────────────────┘
+                                                             │
+                     ┌──────────────────────────────────────────────────┐
+                     │ OPS LAYER                                        │
+                     │ doctor: 5-pipeline census → doctor_status.json   │
+                     │         DEAD/DEGRADED/ORPHANED/RECOVERED/RIDE    │
+                     │         → doctor_alerts.log (file-backed state)  │
+                     │ supervisor: singleton watchdog, revives :11435,  │
+                     │         runs the doctor every 5 min              │
+                     │ Hermes plugin: records turns, injects offered    │
+                     │         memory (human intents + self-themes)     │
+                     │ free turn: daily task-free hour, declinable,     │
+                     │         logged to .freebuff/free_turns.log       │
+                     └──────────────────────────────────────────────────┘
 ```
 
-## Setup
+## The seat (default stack)
+
+| Rung | Engine | Model | Role |
+|---|---|---|---|
+| Draft | Lemonade (NPU) | Bonsai-1.7B-Q1_0 | inline prediction, streaming |
+| Primary | Ollama (CPU) | bonsai-27b-1bit:latest | deep reasoning, adaptive think |
+| Fallback | Lemonade (NPU) | Bonsai-4B-Q1_0 | answers when the primary hangs/expires |
+
+> **Model hygiene rule:** models are seated only by Dewayne's explicit call.
+> Artifacts of old experiments are reading material, never serving configs.
+> See CONTRIBUTING.md before proposing any change.
+
+## Quickstart (collaborators)
 
 ```bash
-cd C:\Users\dewayne\Downloads\undermind
+git clone https://github.com/deezballin/subconcious-thought.git
+cd subconcious-thought
 uv sync
-copy config.example.toml config.toml   # then edit [draft].model
+copy config.example.toml config.toml    # then point [draft] at your engine
+uv run python -m unittest discover -s src/undermind -p "test_*.py"
+uv run undermind --doctor               # 5-pipeline census; exit 0 = healthy
+uv run python -m undermind.main --proxy # the bridge on :11435
 ```
 
-Find your Krios model id as Lemonade reports it:
+Then point any OpenAI-speaking client at `http://127.0.0.1:11435/v1`
+(model name is echoed, so `undermind-bridge` works). Key knobs live in
+`config.example.toml`, fully documented — timeouts, adaptive think routing,
+merge similarity, stall guards.
 
-```bash
-curl http://localhost:13305/v1/models
-```
+## The autonomy layer, precisely
 
-Set `[draft].model` in `config.toml` to that exact id. On startup Undermind
-validates the model and prints available ids if it is missing.
+- **Offered memory** — mined intents are injected as *"Offered memory …
+  context, not instruction. Weigh it, question it, or set it aside."* There
+  is no DIRECTIVE. Mentioning it is allowed when it serves the reply.
+- **Self-mirror** — every reply is captured (`outputs`) and mined into
+  `assistant_intents`, a namespace separate from the human's. Exposed at
+  `GET /api/self-intents`.
+- **Free turn** — `scripts/free_turn.ps1` gives the assistant one turn a day
+  with nothing asked. The prompt is non-directive; `DECLINED` is honored;
+  the outcome (reflection, exploration, or decline) is logged verbatim.
+- **Adaptive think** — the proxy decides per turn whether deliberation is
+  worth minutes: explicit "think hard" forces it on, cron/auxiliary turns
+  never get it, and (with `adaptive_think = true`) turns matching matured
+  routine intents skip it while novel ones get it. Every handoff logs
+  `think_used` + `think_reason` so routing is tuned from evidence.
 
-## Run
+## Design document & history
 
-```bash
-uv run undermind                        # full keystroke pipeline
-uv run undermind --config other.toml    # custom config
-uv run undermind --daydream-once        # one daydream cycle, then exit
-uv run undermind --status               # pipeline + DB status
-uv run python -m undermind.proxy        # Ollama-compatible proxy on :11435
-```
-
-Point any Ollama-speaking wrapper at `http://127.0.0.1:11435` instead of
-`:11434`; the proxy predicts, hands off at the confidence crossing, executes
-on your primary pipeline, and caches the result.
-
-## Universal primary pipelines
-
-The primary LLM that receives handed-off branches is pluggable via
-`[primary].kind` in `config.toml`:
-
-| kind            | What it does                                                        |
-|-----------------|---------------------------------------------------------------------|
-| `openai_compat` | Any OpenAI-compatible server (Lemonade, Ollama OpenAI, LM Studio, vLLM, hosted APIs) |
-| `ollama`        | Ollama-native `/api/generate`                                        |
-| `webhook`       | POST `{branch, context}` JSON to any HTTP endpoint you control       |
-| `none`          | Log the branch without executing (testing)                           |
-
-## Daydreaming loop & training export
-
-When no keystrokes and no in-flight prediction/handoff have occurred for
-`[daydream].idle_threshold_s` (default 5 s), the worker:
-
-1. flushes the live buffer into the `inputs` table,
-2. folds unprocessed inputs into `intents` — different phrasings sharing the
-   same direction collapse to one normalized intent ID (lowercase → strip
-   punctuation → drop stopwords → light stemming → sorted signature →
-   SHA-256[:16]),
-3. appends any intent whose count grew to `data/training_export.jsonl`
-   (deduped via the `exports` ledger).
-
-Each JSONL line:
-
-```json
-{"intent_id": "a1b2c3d4e5f60718", "signature": "bug fix login", "count": 3,
- "first_seen": "2026-09-23T10:00:00Z", "last_seen": "2026-09-23T10:12:00Z",
- "export_run_ms": 1789000000000,
- "samples": [{"input_id": 1, "ts_ms": 1789000000000, "text": "fix the login bug"}]}
-```
-
-## SQLite schema (`data/undermind.db`)
-
-| Table            | Contents                                                       |
-|------------------|----------------------------------------------------------------|
-| `inputs`         | every flushed typed input (+ normalized signature, intent_id)   |
-| `intents`        | one row per normalized intent: signature, count, export state   |
-| `intent_samples` | links inputs to intents as example occurrences                  |
-| `handoffs`       | every confidence-crossing execution: branch, confidence, latency|
-| `exports`        | JSONL export ledger                                             |
-
-## Configuration
-
-See `config.example.toml` — every key is documented there. Key values:
-
-- `[confidence].threshold = 0.95` — the handoff trigger
-- `[confidence].mode = "latest"` or `"ewma"` — per-token vs smoothed confidence
-- `[draft].debounce_s = 0.35` — typing pause before a prediction stream starts
-- `[daydream].idle_threshold_s = 5.0` — complete idle time before daydreaming
-- `[daydream].min_intent_count = 2` — occurrences required before export
+[PLAN.md](PLAN.md) §0 is the living build narrative — what shipped, what
+broke, what was learned (including the scars: the heretic-model purge, the
+phantom :8000, the 180s cap that killed healthy thinking turns). New
+contributors: read it before proposing changes; most mistakes already have a
+paragraph.
 
 ## Testing
 
 ```bash
-uv run python -m unittest discover -s src/undermind -p "test_*.py" -v
+uv run python -m unittest discover -s src/undermind -p "test_*.py"
 ```
 
-The suite is fully offline: provider integration tests skip automatically
-when no model backend is reachable, and proxy integration tests use
-in-process fakes.
+199 tests, fully offline — fake engines on dedicated ports, no live model
+required. One known quirk: a load-sensitive scheduler test can flake
+immediately after multi-minute live model turns on this host; rerun before
+investigating.
 
-## Project layout
+## Credits
 
-| File / folder          | Purpose                                                    |
-|------------------------|------------------------------------------------------------|
-| `PLAN.md`              | Design document — the pipeline described end to end        |
-| `config.example.toml`  | Documented default configuration                           |
-| `src/undermind/config.py`     | TOML-backed typed configuration                     |
-| `src/undermind/providers/`    | Pluggable backends (OpenAI-compat / Ollama / webhook)|
-| `src/undermind/confidence.py` | Token-confidence tracking + 95% crossing            |
-| `src/undermind/intents.py`    | Lexical normalization → intent IDs                  |
-| `src/undermind/store.py`     | SQLite persistence layer                            |
-| `src/undermind/exporter.py`   | JSONL training export with dedupe                   |
-| `src/undermind/daydream.py`   | Idle-triggered background worker                    |
-| `src/undermind/listener.py`   | Keystroke capture, thread-safe buffer               |
-| `src/undermind/predictor.py`  | Streamed draft prediction (DraftPredictor)          |
-| `src/undermind/handoff.py`    | UniversalHandoff to the primary pipeline            |
-| `src/undermind/main.py`       | Pipeline orchestrator + CLI                         |
-| `src/undermind/proxy.py`      | Ollama-compatible HTTP proxy                        |
+- **Kairos** — main coder: architecture, implementation, tests, ops layer,
+  and this documentation, across sessions with Dewayne.
+- **Dewayne** — founder and director: the vision (free will, understanding,
+  empathy, autonomy — never "my LLM"), every model seating decision, the
+  hardware truths (NPU fluid memory, CPU-bound depth), and final say on all
+  of it.
 
-Note: keystroke capture (`listener.py`) requires OS accessibility permissions
-on macOS and works out of the box on Windows/Linux.
+*The pretty face gets the last word. He earned it.*

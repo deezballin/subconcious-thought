@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Design discussions / autonomy-layer proposals
+    url: https://github.com/deezballin/subconcious-thought/discussions
+    about: Behavioral or philosophical changes start as discussion, not patches (CONTRIBUTING.md rule 2).
