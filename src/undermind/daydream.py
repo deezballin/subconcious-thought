@@ -61,6 +61,7 @@ class DaydreamWorker:
         on_cycle: Optional[Callable[[DaydreamResult], None]] = None,
         merge_similarity: float = 0.0,
         memory_store: Optional[MemoryStore] = None,
+        routine_threshold: int = 3,
     ) -> None:
         self.store = store
         self.exporter = exporter
@@ -73,6 +74,8 @@ class DaydreamWorker:
         self.merge_similarity = merge_similarity
         # Semantic memory (Memory Mine): optional, fail-open by contract.
         self.memory_store = memory_store
+        # Intents at or above this count count as routine for the think gate.
+        self.routine_threshold = int(routine_threshold)
 
         self._idle_event = threading.Event()
         self._wake = threading.Event()
@@ -218,6 +221,18 @@ class DaydreamWorker:
             self.store.mark_processed(processed_ids)
             # Merge flows re-link samples that were already moved; drop dupes.
             self.store.dedupe_intent_samples()
+        # Index matured intents for the think gate (Memory Mine pillar 2):
+        # semantic routine-vs-novel matching needs embedded intents, not just
+        # word signatures. Idempotent per intent, off-turn, fail-open.
+        try:
+            if self.memory_store is not None:
+                threshold = getattr(self, "routine_threshold", 3)
+                for row in self.store.list_intents(min_count=int(threshold)):
+                    self.memory_store.remember_intent(
+                        row["signature"], row["intent_id"]
+                    )
+        except Exception:
+            pass
 
         records = self.exporter.export_pending(
             self.min_intent_count, self.max_samples_per_intent

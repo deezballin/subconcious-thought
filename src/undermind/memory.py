@@ -38,6 +38,7 @@ class MemoryStore:
         self.dir_path = Path(dir_path)
         self._model = None
         self._table = None
+        self._gate_table = None
         self._broken = False  # latch: stop retrying a dead backend
 
     # ------------------------------------------------------------------
@@ -135,6 +136,88 @@ class MemoryStore:
         except Exception as exc:
             logger.warning("[memory] store failed, fail-open: %s", exc)
             return False
+
+    # ------------------------------------------------------------------
+    # think gate: matured intents, indexed for the routine-vs-novel decision
+    # ------------------------------------------------------------------
+
+    def _get_gate_table(self):
+        if self._gate_table is None and not self._broken:
+            try:
+                import lancedb
+                import pyarrow as pa
+
+                db = lancedb.connect(str(self.dir_path))
+                schema = pa.schema(
+                    [
+                        pa.field("vector", pa.list_(pa.float32(), EMBED_DIM)),
+                        pa.field("text", pa.string()),
+                        pa.field("ref_str", pa.string()),  # intent_id
+                    ]
+                )
+                if "gate_intents" not in db.table_names():
+                    self._gate_table = db.create_table(
+                        "gate_intents", schema=schema, mode="create"
+                    )
+                else:
+                    self._gate_table = db.open_table("gate_intents")
+            except Exception as exc:
+                logger.warning("[memory] gate table unavailable, fail-open: %s", exc)
+                self._broken = True
+        return self._gate_table
+
+    def remember_intent(self, text: str, intent_id: str) -> bool:
+        """Index a matured intent for the think gate (idempotent per id).
+
+        The signature is re-embedded on every call (signatures are stable,
+        so the vector is too); any previous row for the same intent_id is
+        deleted first so the table stays 1:1 with matured intents.
+        """
+        if not text or not text.strip():
+            return False
+        table = self._get_gate_table()
+        if table is None:
+            return False
+        vector = self._embed(text)
+        if vector is None:
+            return False
+        try:
+            table.delete(f"ref_str = '{intent_id}'")
+        except Exception:
+            pass  # best-effort; a stray duplicate is harmless
+        try:
+            table.add(
+                [{"vector": vector, "text": text[:2000], "ref_str": intent_id}]
+            )
+            return True
+        except Exception as exc:
+            logger.warning("[memory] gate store failed, fail-open: %s", exc)
+            return False
+
+    def gate_match(self, query: str, min_score: float) -> Optional[dict]:
+        """Best matured-intent match for ``query`` above ``min_score``.
+
+        Returns {"score", "ref_str"} or None. This is the certainty metric
+        for the think gate: high similarity to a routine intent means the
+        turn is routine (no deliberation needed).
+        """
+        table = self._get_gate_table()
+        if table is None:
+            return None
+        vector = self._embed(query)
+        if vector is None:
+            return None
+        try:
+            rows = table.search(vector).limit(1).to_list()
+        except Exception as exc:
+            logger.warning("[memory] gate search failed, fail-open: %s", exc)
+            return None
+        if not rows:
+            return None
+        score = 1.0 - float(rows[0].get("_distance", 2.0)) / 2.0
+        if score < min_score:
+            return None
+        return {"score": round(score, 3), "ref_str": str(rows[0].get("ref_str", ""))}
 
     # ------------------------------------------------------------------
     # read path (echoes)

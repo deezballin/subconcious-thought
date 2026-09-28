@@ -85,6 +85,11 @@ class PrimaryConfig:
     # requests pay for deliberation. Ignored when think is true.
     adaptive_think: bool = False
     routine_threshold: int = 3
+    # Embedding-similarity bar for the think gate: a turn whose meaning sits
+    # at least this close (cosine) to a matured routine intent is routine.
+    # Higher = stricter (more turns deliberate). Only used when
+    # adaptive_think is on and the Memory Mine backend is available.
+    routine_similarity: float = 0.72
 
 
 @dataclass

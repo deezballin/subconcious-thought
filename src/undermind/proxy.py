@@ -658,6 +658,20 @@ class UndermindProxy(BaseHTTPRequestHandler):
         cfg = self.config.primary
         if not bool(getattr(cfg, "adaptive_think", False)):
             return bool(cfg.think), "config_default"
+        # Adaptive: semantic match against matured intents (Memory Mine).
+        # Embedding distance decides routine-vs-novel by meaning; jaccard is
+        # the fallback when the memory backend is unavailable. Both fail-open
+        # to the config default.
+        routine_similarity = float(getattr(cfg, "routine_similarity", 0.72))
+        memory = getattr(self, "memory", None)
+        if memory is not None and memory.available:
+            try:
+                match = memory.gate_match(prompt, min_score=routine_similarity)
+                if match:
+                    return False, "routine_match"
+                return True, "adaptive_novel"
+            except Exception:
+                pass  # fall through to jaccard fallback
         try:
             from undermind.intents import find_similar_intent, signature
 
@@ -887,6 +901,9 @@ class ProxyServer:
             max_samples_per_intent=self.config.daydream.max_samples_per_intent,
             merge_similarity=self.config.daydream.merge_similarity,
             memory_store=self.memory,
+            routine_threshold=int(
+                getattr(self.config.primary, "routine_threshold", 3)
+            ),
         )
         self.daydream_scheduler = DaydreamScheduler(
             worker=self.daydream,

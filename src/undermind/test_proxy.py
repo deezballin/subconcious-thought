@@ -557,6 +557,59 @@ class TestThinkRouting(unittest.TestCase):
         self.assertTrue(think)
         self.assertEqual(reason, "adaptive_novel")
 
+    def test_adaptive_semantic_path_routine_match(self):
+        # Pillar 2: with a memory backend present, the gate matches by
+        # embedding distance (gate_match), not jaccard.
+        from types import SimpleNamespace as NS
+
+        self.config.primary.think = False
+        self.config.primary.adaptive_think = True
+        self.config.primary.routine_similarity = 0.5
+        fake_memory = NS(
+            available=True,
+            gate_match=lambda q, min_score: (
+                {"score": 0.9, "ref_str": "aaa"}
+                if "login" in q.lower()
+                else None
+            ),
+        )
+        shim = NS(config=self.config, store=self.store, memory=fake_memory)
+        think, reason = self._handler_cls._decide_think(
+            shim, "can you fix the login bug"
+        )
+        self.assertFalse(think)
+        self.assertEqual(reason, "routine_match")
+
+    def test_adaptive_semantic_path_novel(self):
+        from types import SimpleNamespace as NS
+
+        self.config.primary.think = False
+        self.config.primary.adaptive_think = True
+        fake_memory = NS(
+            available=True,
+            gate_match=lambda q, min_score: None,  # nothing close enough
+        )
+        shim = NS(config=self.config, store=self.store, memory=fake_memory)
+        think, reason = self._handler_cls._decide_think(
+            shim, "design a schema for bird migrations"
+        )
+        self.assertTrue(think)
+        self.assertEqual(reason, "adaptive_novel")
+
+    def test_memory_unavailable_falls_back_to_jaccard(self):
+        from types import SimpleNamespace as NS
+
+        self.config.primary.think = False
+        self.config.primary.adaptive_think = True
+        fake_memory = NS(available=False, gate_match=lambda q, min_score: None)
+        shim = NS(config=self.config, store=self.store, memory=fake_memory)
+        self._seed_routine("fix the login bug", 6)
+        think, reason = self._handler_cls._decide_think(
+            shim, "can you fix the login bug"
+        )
+        self.assertFalse(think)
+        self.assertEqual(reason, "routine_match")  # jaccard fallback
+
 
 if __name__ == "__main__":
     unittest.main()
