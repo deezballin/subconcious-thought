@@ -472,5 +472,91 @@ class TestServedAttribution(unittest.TestCase):
         self.assertFalse(UndermindProxy._serving_summary(shim)["riding_fallback"])
 
 
+class TestThinkRouting(unittest.TestCase):
+    """_decide_think: per-turn think routing, first hit wins.
+
+    The decision lives on the request handler (next to _execute_branch);
+    tests drive it through a lightweight shim carrying config + store.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        from undermind.config import Config
+
+        self.config = Config()
+        self.config.store.db_path = os.path.join(self.tmp.name, "think.db")
+        server = ProxyServer(host=PROXY_HOST, port=11447, config=self.config)
+        self.store = server.store
+        self._handler_cls = server._handler_factory()
+
+    def tearDown(self):
+        self.store.close()
+        self.tmp.cleanup()
+
+    def _decide(self, prompt):
+        from types import SimpleNamespace
+
+        shim = SimpleNamespace(config=self.config, store=self.store)
+        return self._handler_cls._decide_think(shim, prompt)
+
+    def _seed_routine(self, text, count):
+        from undermind.intents import signature
+
+        iid = f"routine-{abs(hash(text)) % 99999}"
+        self.store._conn.execute(
+            "INSERT OR REPLACE INTO intents (intent_id, signature, first_seen_ms,"
+            " last_seen_ms, count) VALUES (?, ?, 1, 1, ?)",
+            (iid, signature(text), count),
+        )
+        self.store._conn.commit()
+
+    def test_explicit_request_wins(self):
+        think, reason = self._decide("please think hard about this")
+        self.assertTrue(think)
+        self.assertEqual(reason, "explicit_request")
+
+    def test_cron_envelope_never_thinks(self):
+        think, reason = self._decide(
+            "[IMPORTANT: You are running as a scheduled cron job. DELIVERY: x]"
+        )
+        self.assertFalse(think)
+        self.assertEqual(reason, "auxiliary_turn")
+
+    def test_config_default_when_adaptive_off(self):
+        self.config.primary.think = True
+        self.config.primary.adaptive_think = False
+        think, reason = self._decide("a plain question")
+        self.assertTrue(think)
+        self.assertEqual(reason, "config_default")
+
+    def test_adaptive_routine_match_stays_off(self):
+        self.config.primary.think = False
+        self.config.primary.adaptive_think = True
+        self.config.primary.routine_threshold = 3
+        self._seed_routine("fix the login bug", 6)
+        think, reason = self._decide("can you fix the login bug")
+        self.assertFalse(think)
+        self.assertEqual(reason, "routine_match")
+
+    def test_adaptive_novel_thinks(self):
+        self.config.primary.think = False
+        self.config.primary.adaptive_think = True
+        self._seed_routine("fix the login bug", 6)
+        think, reason = self._decide(
+            "design a schema for tracking bird migrations"
+        )
+        self.assertTrue(think)
+        self.assertEqual(reason, "adaptive_novel")
+
+    def test_adaptive_below_threshold_not_routine(self):
+        self.config.primary.think = False
+        self.config.primary.adaptive_think = True
+        self.config.primary.routine_threshold = 3
+        self._seed_routine("fix the login bug", 2)  # seen but not matured
+        think, reason = self._decide("can you fix the login bug")
+        self.assertTrue(think)
+        self.assertEqual(reason, "adaptive_novel")
+
+
 if __name__ == "__main__":
     unittest.main()

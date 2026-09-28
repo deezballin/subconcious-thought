@@ -172,6 +172,21 @@ class _StopStream(Exception):
     """Internal: unwinds the token stream after the threshold crossing."""
 
 
+# Per-turn think routing markers (module-level so tests can shim handlers).
+THINK_MARKERS = (
+    "think hard",
+    "think deeply",
+    "reason carefully",
+    "think this through",
+    "deliberate",
+    "step by step",
+)
+CRON_MARKERS = (
+    "[important: you are running as a scheduled cron job",
+    "[context from the interrupted assistant response",
+)
+
+
 class UndermindProxy(BaseHTTPRequestHandler):
     """Ollama-compatible HTTP handler backed by the universal pipeline."""
 
@@ -604,6 +619,43 @@ class UndermindProxy(BaseHTTPRequestHandler):
     # confidence-crossing branch execution
     # ------------------------------------------------------------------
 
+    def _decide_think(self, prompt: str) -> tuple[bool, str]:
+        """Per-turn think routing for the Ollama primary.
+
+        Priority order (first hit wins):
+        1. explicit "think hard"-style request -> on
+        2. cron / auxiliary envelope -> off (they were never asked to think)
+        3. config default (adaptive_think off, or think on) -> config value
+        4. adaptive: turn matching a matured routine intent (count >=
+           routine_threshold) -> off; novel -> on (only new ground pays
+           for deliberation).
+        Returns (think, reason) for the handoff log.
+        """
+        lowered = (prompt or "").lower()
+        if any(m in lowered for m in THINK_MARKERS):
+            return True, "explicit_request"
+        if any(m in lowered for m in CRON_MARKERS):
+            return False, "auxiliary_turn"
+        cfg = self.config.primary
+        if not bool(getattr(cfg, "adaptive_think", False)):
+            return bool(cfg.think), "config_default"
+        try:
+            from undermind.intents import find_similar_intent, signature
+
+            sig = signature(prompt)
+            if not sig:
+                return True, "adaptive_novel"  # nothing to match: deliberate
+            matured = [
+                (r["intent_id"], r["signature"])
+                for r in self.store.list_intents(min_count=1)
+                if r["count"] >= int(getattr(cfg, "routine_threshold", 3))
+            ]
+            if matured and find_similar_intent(sig, matured, 0.6) is not None:
+                return False, "routine_match"
+            return True, "adaptive_novel"
+        except Exception:
+            return bool(cfg.think), "config_default"  # fail-open to config
+
     def _execute_branch(self, prompt: str) -> dict:
         """Predict, cross the threshold, execute on the primary, record it."""
         start_ns = time.perf_counter_ns()
@@ -618,9 +670,19 @@ class UndermindProxy(BaseHTTPRequestHandler):
                 confidence = tracker.crossing.confidence
                 branch = prompt + tracker.text
 
-        result = self.primary.execute(
-            branch, context=self.config.primary.system_prompt or None
-        )
+        think_used, think_reason = self._decide_think(prompt)
+        try:
+            result = self.primary.execute(
+                branch,
+                context=self.config.primary.system_prompt or None,
+                think=think_used,
+            )
+        except TypeError:
+            # Provider without per-call override (openai_compat, webhook,
+            # Noop, fakes): execute without the kwarg.
+            result = self.primary.execute(
+                branch, context=self.config.primary.system_prompt or None
+            )
         latency_ms = (time.perf_counter_ns() - start_ns) / 1e6
 
         # Attribute the response to the engine that actually served it.
@@ -643,6 +705,8 @@ class UndermindProxy(BaseHTTPRequestHandler):
             status="ok",
             confidence=confidence,
             latency_ms=latency_ms,
+            think_used=think_used,
+            think_reason=think_reason,
         )
         try:
             # Self-mirror: capture what Kairos actually said, for its own

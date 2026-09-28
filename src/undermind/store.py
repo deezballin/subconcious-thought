@@ -58,7 +58,9 @@ CREATE TABLE IF NOT EXISTS handoffs (
     model TEXT NOT NULL,
     status TEXT NOT NULL,
     latency_ms REAL,
-    error TEXT
+    error TEXT,
+    think_used INTEGER,
+    think_reason TEXT
 );
 
 CREATE TABLE IF NOT EXISTS exports (
@@ -127,7 +129,27 @@ class UndermindStore:
                 "INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?)",
                 (str(SCHEMA_VERSION),),
             )
+            self._migrate()
             self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Idempotent column additions for databases created before a change.
+
+        CREATE TABLE IF NOT EXISTS never alters existing tables, so new
+        columns are added with ALTER TABLE when absent.
+        """
+        existing = {
+            r["name"]
+            for r in self._conn.execute("PRAGMA table_info(handoffs)").fetchall()
+        }
+        if "think_used" not in existing:
+            self._conn.execute(
+                "ALTER TABLE handoffs ADD COLUMN think_used INTEGER"
+            )
+        if "think_reason" not in existing:
+            self._conn.execute(
+                "ALTER TABLE handoffs ADD COLUMN think_reason TEXT"
+            )
 
     # ------------------------------------------------------------------
     # inputs
@@ -385,13 +407,16 @@ class UndermindStore:
         confidence: Optional[float] = None,
         latency_ms: Optional[float] = None,
         error: Optional[str] = None,
+        think_used: Optional[bool] = None,
+        think_reason: str = "",
     ) -> int:
         """Log one fast-handoff execution of a text branch."""
         with self._lock:
             cursor = self._conn.execute(
                 "INSERT INTO handoffs (ts_ns, trigger, confidence, branch,"
-                " provider, model, status, latency_ms, error)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " provider, model, status, latency_ms, error, think_used,"
+                " think_reason)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     time.time_ns(),
                     trigger,
@@ -402,6 +427,8 @@ class UndermindStore:
                     status,
                     latency_ms,
                     error,
+                    None if think_used is None else (1 if think_used else 0),
+                    think_reason or None,
                 ),
             )
             self._conn.commit()

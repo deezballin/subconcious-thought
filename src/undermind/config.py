@@ -78,6 +78,13 @@ class PrimaryConfig:
     # set false to skip deliberation and reply directly - several times
     # faster, slightly shallower. Ollama-native kind only.
     think: bool = True
+    # Per-turn think routing: cron/auxiliary requests never think (they were
+    # never asked to deliberate); an explicit "think hard" in the message
+    # forces it on; with this knob on, turns matching matured routine intents
+    # (count >= routine_threshold) also stay off, so only genuinely novel
+    # requests pay for deliberation. Ignored when think is true.
+    adaptive_think: bool = False
+    routine_threshold: int = 3
 
 
 @dataclass

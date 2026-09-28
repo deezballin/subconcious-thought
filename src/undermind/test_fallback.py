@@ -390,6 +390,12 @@ class TestStallGuard(unittest.TestCase):
         )
         self.assertIn("options", guarded._payload("p", stream=True))
 
+        # Per-call override wins over the constructor default, both ways.
+        deep = OllamaNativeProvider(base_url="http://127.0.0.1:1/", model="m")
+        self.assertIs(deep._payload("p", stream=False, think=False)["think"], False)
+        self.assertIs(guarded._payload("p", stream=False, think=True)["think"], True)
+        self.assertIs(guarded._payload("p", stream=False)["think"], False)
+
         deep = OllamaNativeProvider(base_url="http://127.0.0.1:1/", model="m")
         self.assertIs(deep._payload("p", stream=False)["think"], True)
 

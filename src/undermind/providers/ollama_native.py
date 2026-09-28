@@ -9,6 +9,7 @@ when the draft model is hosted by Ollama instead of Lemonade.
 from __future__ import annotations
 
 import json
+from typing import Optional
 
 import requests
 
@@ -120,19 +121,19 @@ class OllamaNativeProvider:
             raise ProviderError(f"Cannot reach {self.base_url}{TAGS_PATH}: {exc}") from exc
         return [m.get("name", "") for m in response.json().get("models", [])]
 
-    def _payload(self, prompt: str, stream: bool) -> dict:
+    def _payload(self, prompt: str, stream: bool, think: Optional[bool] = None) -> dict:
         """Generate payload for primary execution (think flag included)."""
         payload = {
             "model": self.model,
             "prompt": prompt,
             "stream": stream,
-            "think": self.think,
+            "think": self.think if think is None else think,
         }
         if stream and self.stall_timeout_s and self.stall_timeout_s > 0:
             payload["options"] = {"logprobs": 1}
         return payload
 
-    def execute(self, branch: str, context: str | None = None) -> str:
+    def execute(self, branch: str, context: str | None = None, think: Optional[bool] = None) -> str:
         """Generate for primary-pipeline execution.
 
         Streams internally so the socket read timeout bounds the silent gap
@@ -143,7 +144,7 @@ class OllamaNativeProvider:
         """
         prompt = f"{context}\n\n{branch}" if context else branch
         if not self.stall_timeout_s or self.stall_timeout_s <= 0:
-            payload = self._payload(prompt, stream=False)
+            payload = self._payload(prompt, stream=False, think=think)
             try:
                 response = requests.post(
                     f"{self.base_url}{GENERATE_PATH}",
@@ -155,7 +156,7 @@ class OllamaNativeProvider:
                 raise ProviderError(f"Primary execution failed: {exc}") from exc
             return response.json().get("response", "")
 
-        payload = self._payload(prompt, stream=True)
+        payload = self._payload(prompt, stream=True, think=think)
         collected: list[str] = []
         try:
             with requests.post(
