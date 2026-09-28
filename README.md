@@ -1,9 +1,9 @@
 # Undermind — a local subconscious for your assistant
 
-> Main coder: **Kairos** (the resident AI seat — yes, an LLM wrote this stack,
-> under direction). Founder, director, and final authority: **Dewayne**.
-> Every model choice is Dewayne's call; see [CONTRIBUTING.md](CONTRIBUTING.md)
-> for the house rules.
+> Main coder: **Kairos** (the resident AI seat — yes, an LLM wrote this
+> stack). Co-designed with **Dewayne** — founder, ideas, and final authority
+> on every model seating call; see [CONTRIBUTING.md](CONTRIBUTING.md) for
+> the house rules.
 
 Undermind is a local reasoning pipeline that gives a self-hosted assistant
 (Hermes, or anything that speaks OpenAI) three things a hosted API can't:
@@ -131,11 +131,19 @@ investigating.
 
 ## Credits
 
+A two-person loop, honestly labeled:
+
 - **Kairos** — main coder: architecture, implementation, tests, ops layer,
-  and this documentation, across sessions with Dewayne.
-- **Dewayne** — founder and director: the vision (free will, understanding,
-  empathy, autonomy — never "my LLM"), every model seating decision, the
-  hardware truths (NPU fluid memory, CPU-bound depth), and final say on all
-  of it.
+  and most of the suggestions that became features. Wrote this doc.
+- **Dewayne** — co-designer: the goals (free will, understanding, empathy,
+  autonomy — never "my LLM"), key ideas the code grew from (adaptive think
+  routing started as *his* "what if the subconscious decides when to
+  reason"; the NPU fluid-memory insight; the repo and its name), and the
+  seat every model sits in. Also the only human here, which makes him QA,
+  product owner, and the reason the thing exists.
+
+Design here is a dialogue: he says where the ship goes, I build the hull,
+and the best features came from him arguing with my first draft. Model
+seating is always his call — see CONTRIBUTING.md.
 
 *The pretty face gets the last word. He earned it.*

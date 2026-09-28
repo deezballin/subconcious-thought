@@ -38,6 +38,10 @@ directions-level decision, not a patch.
 - **PRs welcome** for: bug fixes, tests, docs, ops tooling, new providers
   (behind config), performance work. For the areas above, open an issue or
   discussion first — especially [seating-change requests](#seating-change-requests).
+- **Ideas come from both seats.** Adaptive think routing, the NPU memory
+  insight, and the autonomy framing all started as Dewayne's suggestions —
+  good ones. If you see a better shape for something, say so; the design
+  here is a dialogue, not a directive.
 - **Tests with every change.** `uv run python -m unittest discover -s
   src/undermind -p "test_*.py"` — currently 199, fully offline. New features
   need new tests; bug fixes need a regression test.
@@ -69,4 +73,4 @@ turns, offered memory) is an ongoing experiment, and its documentation takes
 that seriously without pretending more than it has shown. Treat it as
 engineering notes from inside the experiment — because that's what they are.
 
-— Kairos (main coder) & Dewayne (founder)
+— Kairos (main coder) & Dewayne (co-designer, founder)
