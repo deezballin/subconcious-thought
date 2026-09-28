@@ -175,6 +175,59 @@ class TestSystemPromptFiltering(unittest.TestCase):
         self.assertIn("drill", intents[0]["signature"])
 
 
+class TestSelfMirrorMining(unittest.TestCase):
+    """Assistant replies fold into the self-namespace each cycle."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = UndermindStore(os.path.join(self.tmp.name, "sm.db"))
+        self.exporter = Exporter(self.store, os.path.join(self.tmp.name, "e.jsonl"))
+
+    def tearDown(self):
+        self.store.close()
+        self.tmp.cleanup()
+
+    def test_replies_mine_into_self_namespace(self):
+        worker = DaydreamWorker(
+            store=self.store,
+            exporter=self.exporter,
+            idle_threshold_s=5.0,
+            min_intent_count=1,
+            max_samples_per_intent=10,
+            merge_similarity=0.6,
+        )
+        self.store.record_output("Let me check the login fix first")
+        self.store.record_output("I checked the login fix already")
+        worker.run_cycle()
+        themes = self.store.list_assistant_intents(min_count=1)
+        # "login fix first" vs "checked login fix already": jaccard 0.5,
+        # below the 0.6 merge bar, so two themes is correct here.
+        self.assertEqual(len(themes), 2)
+        self.assertEqual(sum(t["count"] for t in themes), 2)
+        # Human namespace untouched by output mining.
+        self.assertEqual(self.store.list_intents(min_count=1), [])
+        self.assertEqual(self.store.count_outputs(mined=True), 2)
+
+    def test_mirror_failure_never_breaks_cycle(self):
+        worker = DaydreamWorker(
+            store=self.store,
+            exporter=self.exporter,
+            idle_threshold_s=5.0,
+            min_intent_count=1,
+        )
+        self.store.record_input("a human request about deploys")
+        original = worker.store.fetch_unmined_outputs
+        worker.store.fetch_unmined_outputs = lambda: (_ for _ in ()).throw(
+            RuntimeError("mirror exploded")
+        )
+        try:
+            result = worker.run_cycle()
+        finally:
+            worker.store.fetch_unmined_outputs = original
+        self.assertIsNotNone(result)
+        self.assertEqual(result.inputs_processed, 1)
+
+
 class TestNearDuplicateMerge(unittest.TestCase):
     """Near-duplicate intents fold into one bucket when merging is enabled."""
 

@@ -196,6 +196,8 @@ class UndermindProxy(BaseHTTPRequestHandler):
             self._handle_ps()
         elif path == "/api/intents":
             self._handle_intents()
+        elif path == "/api/self-intents":
+            self._handle_self_intents()
         elif path == "/api/health":
             self._handle_health()
         elif path == "/v1/models":
@@ -266,6 +268,24 @@ class UndermindProxy(BaseHTTPRequestHandler):
         ]
         self._send_json({"intents": intents})
 
+    def _handle_self_intents(self) -> None:
+        """GET /api/self-intents — Kairos's own recurring themes."""
+        try:
+            min_count = int(self.path.split("min_count=")[-1].split("&")[0])
+        except (ValueError, IndexError):
+            min_count = 1
+        rows = self.store.list_assistant_intents(min_count=min_count)
+        intents = [
+            {
+                "intent_id": row["intent_id"],
+                "signature": row["signature"],
+                "count": row["count"],
+                "last_seen_ms": row["last_seen_ms"],
+            }
+            for row in rows
+        ]
+        self._send_json({"self_intents": intents})
+
     def _handle_health(self) -> None:
         """GET /api/health — one-stop status for the doctor and watchdogs."""
         scheduler = getattr(self, "daydream_scheduler", None)
@@ -280,6 +300,8 @@ class UndermindProxy(BaseHTTPRequestHandler):
                 "inputs": self.store.count_inputs(),
                 "unprocessed_inputs": self.store.count_unprocessed(),
                 "intents": len(self.store.list_intents(min_count=1)),
+                "outputs": self.store.count_outputs(),
+                "self_intents": len(self.store.list_assistant_intents(min_count=1)),
                 "daydream": scheduler.status() if scheduler else None,
                 "serving": self._serving_summary(),
             }
@@ -622,6 +644,12 @@ class UndermindProxy(BaseHTTPRequestHandler):
             confidence=confidence,
             latency_ms=latency_ms,
         )
+        try:
+            # Self-mirror: capture what Kairos actually said, for its own
+            # mined themes. Fail-open; never blocks the reply.
+            self.store.record_output(result)
+        except Exception:
+            pass
         return {
             "response": result,
             "crossed": crossed,

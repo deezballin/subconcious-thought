@@ -165,8 +165,15 @@ class DaydreamWorker:
         flushed = self._flush_buffer()
         unprocessed = self.store.fetch_unprocessed()
 
-        if not unprocessed:
+        if not unprocessed and self.store.count_outputs(mined=False) == 0:
             return None
+
+        # Fold the assistant's own replies into its self-mirror —
+        # unconditionally, not only when human inputs arrived (fail-open).
+        try:
+            self._mine_outputs()
+        except Exception:
+            pass
 
         updated_ids: List[str] = []
         processed_ids: List[int] = []
@@ -203,9 +210,10 @@ class DaydreamWorker:
             if target_id not in updated_ids:
                 updated_ids.append(target_id)
 
-        self.store.mark_processed(processed_ids)
-        # Merge flows re-link samples that were already moved; drop dupes.
-        self.store.dedupe_intent_samples()
+        if processed_ids:
+            self.store.mark_processed(processed_ids)
+            # Merge flows re-link samples that were already moved; drop dupes.
+            self.store.dedupe_intent_samples()
 
         records = self.exporter.export_pending(
             self.min_intent_count, self.max_samples_per_intent
@@ -220,6 +228,42 @@ class DaydreamWorker:
         self.last_result = result
         self.cycles_run += 1
         return result
+
+    def _mine_outputs(self) -> int:
+        """Fold unmined assistant replies into the self-mirror.
+
+        Kairos's own recurring themes, in a namespace separate from the
+        human's intents — the material for self-understanding rather than
+        another lever on behavior. Returns the number of outputs folded.
+        """
+        outputs = self.store.fetch_unmined_outputs()
+        folded = 0
+        for row in outputs:
+            text = row["text"]
+            if not text or not text.strip():
+                self.store.mark_outputs_mined([row["id"]])
+                continue
+            sig = compute_signature(text)
+            if not sig:
+                self.store.mark_outputs_mined([row["id"]])
+                continue
+            iid = compute_intent_id(text)
+            self.store.upsert_assistant_intent(iid, sig)
+            if self.merge_similarity > 0:
+                candidates = [
+                    (r["intent_id"], r["signature"])
+                    for r in self.store.list_assistant_intents(min_count=1)
+                    if r["intent_id"] != iid
+                ]
+                similar = find_similar_intent(sig, candidates, self.merge_similarity)
+                if similar is not None:
+                    # Self-namespace merge: move samples, sum counts.
+                    self.store.merge_assistant_intent(iid, similar)
+                    iid = similar
+            self.store.add_assistant_sample(iid, row["id"])
+            self.store.mark_outputs_mined([row["id"]])
+            folded += 1
+        return folded
 
     def _flush_buffer(self) -> Optional[int]:
         """Commit the live typed buffer (if any) as a new input row."""

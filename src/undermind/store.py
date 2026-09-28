@@ -73,6 +73,33 @@ CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- Self-mirror: the assistant's own outputs, mined the same way the human's
+-- inputs are, so Kairos can see its own recurring themes (namespace is
+-- deliberately separate from the human intents).
+CREATE TABLE IF NOT EXISTS outputs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts_ms INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    handoff_id INTEGER,
+    mined INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS assistant_intents (
+    intent_id TEXT PRIMARY KEY,
+    signature TEXT NOT NULL,
+    first_seen_ms INTEGER NOT NULL,
+    last_seen_ms INTEGER NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS assistant_intent_samples (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    intent_id TEXT NOT NULL,
+    output_id INTEGER NOT NULL,
+    ts_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_asst_samples_intent ON assistant_intent_samples(intent_id);
 """
 
 
@@ -414,6 +441,119 @@ class UndermindStore:
             )
             self._conn.commit()
             return int(cursor.lastrowid)
+
+    # ------------------------------------------------------------------
+    # self-mirror: the assistant's own outputs and their mined themes
+    # ------------------------------------------------------------------
+
+    def record_output(self, text: str, handoff_id: Optional[int] = None) -> int:
+        """Capture an assistant reply for self-mining."""
+        if not text or not text.strip():
+            return 0
+        with self._lock:
+            cursor = self._conn.execute(
+                "INSERT INTO outputs (ts_ms, text, handoff_id) VALUES (?, ?, ?)",
+                (now_ms(), text, handoff_id),
+            )
+            self._conn.commit()
+            return int(cursor.lastrowid)
+
+    def count_outputs(self, mined: Optional[bool] = None) -> int:
+        with self._lock:
+            if mined is None:
+                row = self._conn.execute(
+                    "SELECT COUNT(*) AS n FROM outputs"
+                ).fetchone()
+            else:
+                row = self._conn.execute(
+                    "SELECT COUNT(*) AS n FROM outputs WHERE mined = ?",
+                    (1 if mined else 0,),
+                ).fetchone()
+            return int(row["n"])
+
+    def fetch_unmined_outputs(self, limit: int = 50) -> list:
+        """Assistant replies not yet folded into the self-mirror."""
+        with self._lock:
+            return self._conn.execute(
+                "SELECT id, text FROM outputs WHERE mined = 0"
+                " ORDER BY id LIMIT ?",
+                (limit,),
+            ).fetchall()
+
+    def mark_outputs_mined(self, output_ids: Sequence[int]) -> None:
+        if not output_ids:
+            return
+        placeholders = ",".join("?" for _ in output_ids)
+        with self._lock:
+            self._conn.execute(
+                f"UPDATE outputs SET mined = 1 WHERE id IN ({placeholders})",
+                tuple(output_ids),
+            )
+            self._conn.commit()
+
+    def upsert_assistant_intent(self, intent_id: str, signature: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO assistant_intents (intent_id, signature,"
+                " first_seen_ms, last_seen_ms, count) VALUES (?, ?, ?, ?, 1)"
+                " ON CONFLICT(intent_id) DO UPDATE SET count = count + 1,"
+                " last_seen_ms = excluded.last_seen_ms",
+                (intent_id, signature, now_ms(), now_ms()),
+            )
+            self._conn.commit()
+
+    def add_assistant_sample(self, intent_id: str, output_id: int) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO assistant_intent_samples (intent_id, output_id, ts_ms)"
+                " VALUES (?, ?, ?)",
+                (intent_id, output_id, now_ms()),
+            )
+            self._conn.commit()
+
+    def merge_assistant_intent(self, source_id: str, target_id: str) -> int:
+        """Fold source self-theme into target; returns target's new count."""
+        with self._lock:
+            source = self._conn.execute(
+                "SELECT * FROM assistant_intents WHERE intent_id = ?", (source_id,)
+            ).fetchone()
+            target = self._conn.execute(
+                "SELECT * FROM assistant_intents WHERE intent_id = ?", (target_id,)
+            ).fetchone()
+            if source is None or target is None or source_id == target_id:
+                return int(target["count"]) if target is not None else 0
+            self._conn.execute(
+                "UPDATE assistant_intent_samples SET intent_id = ?"
+                " WHERE intent_id = ?",
+                (target_id, source_id),
+            )
+            self._conn.execute(
+                "UPDATE assistant_intents SET count = ?,"
+                " first_seen_ms = MIN(first_seen_ms, ?),"
+                " last_seen_ms = MAX(last_seen_ms, ?)"
+                " WHERE intent_id = ?",
+                (
+                    int(target["count"]) + int(source["count"]),
+                    int(source["first_seen_ms"]),
+                    int(source["last_seen_ms"]),
+                    target_id,
+                ),
+            )
+            self._conn.execute(
+                "DELETE FROM assistant_intents WHERE intent_id = ?", (source_id,)
+            )
+            self._conn.commit()
+            return int(target["count"]) + int(source["count"])
+
+    def list_assistant_intents(self, min_count: int = 1) -> list:
+        """Kairos's recurring themes, strongest first."""
+        with self._lock:
+            return self._conn.execute(
+                "SELECT intent_id, signature, count, last_seen_ms"
+                " FROM assistant_intents WHERE count >= ?"
+                " ORDER BY count DESC, last_seen_ms DESC LIMIT 20",
+                (min_count,),
+            ).fetchall()
 
     # ------------------------------------------------------------------
     # lifecycle

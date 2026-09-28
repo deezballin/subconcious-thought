@@ -208,5 +208,50 @@ class TestStoreMerge(unittest.TestCase):
         self.assertEqual(self.store.get_intent(id_a)["count"], 1)
 
 
+class TestSelfMirror(unittest.TestCase):
+    """Kairos's own outputs, mined into a separate namespace."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = UndermindStore(os.path.join(self.tmp.name, "mirror.db"))
+
+    def tearDown(self):
+        self.store.close()
+        self.tmp.cleanup()
+
+    def test_record_fetch_and_mark_mined(self):
+        self.assertEqual(self.store.record_output(""), 0)
+        oid = self.store.record_output("I keep suggesting login fixes first")
+        self.assertGreater(oid, 0)
+        self.assertEqual(self.store.count_outputs(), 1)
+        self.assertEqual(self.store.count_outputs(mined=False), 1)
+        rows = self.store.fetch_unmined_outputs()
+        self.assertEqual(len(rows), 1)
+        self.store.mark_outputs_mined([rows[0]["id"]])
+        self.assertEqual(self.store.count_outputs(mined=True), 1)
+        self.assertEqual(self.store.fetch_unmined_outputs(), [])
+
+    def test_theme_lifecycle_and_merge(self):
+        self.store.upsert_assistant_intent("aaa", "check login first")
+        self.store.add_assistant_sample("aaa", 1)
+        self.store.upsert_assistant_intent("aaa", "check login first")  # count -> 2
+        self.store.upsert_assistant_intent("bbb", "offer the staging deploy")
+        self.store.add_assistant_sample("bbb", 2)
+        merged = self.store.merge_assistant_intent("bbb", "aaa")
+        self.assertEqual(merged, 3)
+        self.assertIsNone(
+            self.store._conn.execute(
+                "SELECT * FROM assistant_intents WHERE intent_id = 'bbb'"
+            ).fetchone()
+        )
+        rows = self.store.list_assistant_intents(min_count=1)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["count"], 3)
+        samples = self.store._conn.execute(
+            "SELECT output_id FROM assistant_intent_samples WHERE intent_id = 'aaa'"
+        ).fetchall()
+        self.assertEqual(sorted(s["output_id"] for s in samples), [1, 2])
+
+
 if __name__ == "__main__":
     unittest.main()
