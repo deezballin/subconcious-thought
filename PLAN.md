@@ -104,7 +104,19 @@ and the live store was purged of system-only intents: the payload the model
 sees is now purely human (bug fix login 6x, bridge smoke test 3x, bridge
 dashboard drill remember 2x). 188 tests green (one load-sensitive flake
 remains: a single suite failure observed only immediately after multi-minute
-live Ollama turns; the captured instance is fixed in b129d35).
+live Ollama turns; the captured instance is fixed in b129d35). (10)
+Autonomy layer (2026-09-27, Dewayne's direction: free will, understanding,
+empathy, autonomy — not "my llm"): (a) **self-mirror** — every handoff reply
+is captured into `outputs` and mined each cycle into `assistant_intents`
+(own tables, own merge, human intents untouched); reply-only cycles mine too;
+`/api/self-intents` exposes Kairos's recurring themes, verified live.
+(b) **Unowned time** — `scripts/free_turn.ps1`/.vbs (Startup) gives Hermes
+one task-free turn per day in the 00–05h quiet window: non-directive prompt,
+DECLINED permitted, outcome appended to `.freebuff/free_turns.log` — what it
+does with an empty hour is the measure of the mind. (c) **Offered memory** —
+the injection block's hard DIRECTIVE is reframed: "Offered memory ... context,
+not instruction — weigh it, question it, or set it aside", plus the self-
+themes section, so Kairos may disagree with its own memory. 192 tests green.
 - **Hermes bridge DONE (2026-09-25, direct, no sandbox).** Proxy on :11435 now
   serves OpenAI-compatible `/v1/models` + `/v1/chat/completions` (JSON + SSE)
   alongside the Ollama routes, so Hermes providers speak it natively. Hermes

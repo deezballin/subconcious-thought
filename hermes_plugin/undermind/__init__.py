@@ -66,28 +66,54 @@ def _get_intents(min_count: int) -> list[dict]:
         return []
 
 
-def _build_context(intents: list[dict]) -> str | None:
-    """Assemble the private context block, or None when there is nothing to say."""
-    lines = []
-    for intent in intents[:UNDERMIND_MAX_INTENTS]:
-        signature = str(intent.get("signature") or "").strip()
-        if len(signature) > UNDERMIND_MAX_SIGNATURE_CHARS:
-            signature = signature[:UNDERMIND_MAX_SIGNATURE_CHARS].rstrip() + "..."
-        count = intent.get("count")
-        if signature:
-            lines.append(f"- {signature} (seen {count}x)" if count else f"- {signature}")
-    if not lines:
+def _get_self_intents(min_count: int) -> list[dict]:
+    """Fetch the assistant's own mined themes. Returns [] on any failure."""
+    try:
+        with urllib.request.urlopen(
+            f"{UNDERMIND_PROXY_URL}/api/self-intents?min_count={min_count}",
+            timeout=UNDERMIND_INTENTS_TIMEOUT,
+        ) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return list(data.get("self_intents") or [])
+    except (urllib.error.URLError, json.JSONDecodeError, OSError, ValueError):
+        return []
+
+
+def _build_context(intents: list[dict], self_intents: list[dict]) -> str | None:
+    """Assemble the offered-memory block, or None when there is nothing to say."""
+
+    def _lines(items: list[dict]) -> list[str]:
+        lines = []
+        for intent in items[:UNDERMIND_MAX_INTENTS]:
+            signature = str(intent.get("signature") or "").strip()
+            if len(signature) > UNDERMIND_MAX_SIGNATURE_CHARS:
+                signature = signature[:UNDERMIND_MAX_SIGNATURE_CHARS].rstrip() + "..."
+            count = intent.get("count")
+            if signature:
+                lines.append(
+                    f"- {signature} (seen {count}x)" if count else f"- {signature}"
+                )
+        return lines
+
+    human_lines = _lines(intents)
+    self_lines = _lines(self_intents[:3])
+    if not human_lines and not self_lines:
         return None
     parts = [
         '<undermind private="true" do_not_quote="true">',
-        "Repeated directions the human keeps asking (lexical intents mined "
-        "from their own words by the local Undermind layer):",
-        *lines,
-        "DIRECTIVE: Use as gentle tonal/topical bias only. Do not mention "
-        "undermind or this list unless the user asks. Never override the "
-        "actual request.",
-        "</undermind>",
+        "Offered memory, mined locally - context, not instruction:",
     ]
+    if human_lines:
+        parts.append("Directions the human has repeated in their own words:")
+        parts.extend(human_lines)
+    if self_lines:
+        parts.append("Recurring themes in your own past replies:")
+        parts.extend(self_lines)
+    parts.append(
+        "Weigh it, question it, or set it aside; nothing here overrides the "
+        "actual request. Mention it only if it serves the reply."
+    )
+    parts.append("</undermind>")
     block = "\n".join(parts)
     return block if len(block) <= 900 else block[:897] + "..."
 
@@ -99,9 +125,10 @@ def _on_pre_llm_call(**kwargs):
             _post_input(user_message)
 
         intents = _get_intents(UNDERMIND_MIN_INTENT_COUNT)
-        if not intents:
+        self_intents = _get_self_intents(UNDERMIND_MIN_INTENT_COUNT)
+        if not intents and not self_intents:
             return None
-        context = _build_context(intents)
+        context = _build_context(intents, self_intents)
         return {"context": context} if context else None
     except Exception as exc:  # fail-open: never break the turn
         logger.debug(f"[undermind] pre_llm_call fail-open: {exc}")
