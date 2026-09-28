@@ -213,6 +213,8 @@ class UndermindProxy(BaseHTTPRequestHandler):
             self._handle_intents()
         elif path == "/api/self-intents":
             self._handle_self_intents()
+        elif path == "/api/echoes":
+            self._handle_echoes()
         elif path == "/api/health":
             self._handle_health()
         elif path == "/v1/models":
@@ -222,14 +224,24 @@ class UndermindProxy(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        # Drain the request body up front: a handler that crashes before
+        # reading it leaves the client mid-send while we respond, which
+        # intermittently resets the connection instead of returning the
+        # intended status (observed as flaky 404 tests).
+        try:
+            body = self._read_body()
+        except Exception:
+            body = {}
         if path == "/api/generate":
-            self._handle_generate()
+            self._handle_generate(body)
         elif path == "/api/chat":
-            self._handle_chat()
+            self._handle_chat(body)
         elif path == "/api/inputs":
-            self._handle_inputs()
+            self._handle_inputs(body)
+        elif path == "/api/echoes":
+            self._handle_echoes_post(body)
         elif path == "/v1/chat/completions":
-            self._handle_v1_chat()
+            self._handle_v1_chat(body)
         else:
             self._not_found()
 
@@ -240,10 +252,9 @@ class UndermindProxy(BaseHTTPRequestHandler):
     # daydream bridge endpoints (Hermes plugin fuel)
     # ------------------------------------------------------------------
 
-    def _handle_inputs(self) -> None:
+    def _handle_inputs(self, body: dict) -> None:
         """POST {"text": ...} — record a prompt into the daydream store."""
         try:
-            body = self._read_body()
             text = str(body.get("text", "")).strip()
             if not text:
                 self._error(ValueError("empty text"), status=400)
@@ -283,6 +294,20 @@ class UndermindProxy(BaseHTTPRequestHandler):
         ]
         self._send_json({"intents": intents})
 
+    def _handle_echoes(self, query: str = "", limit: int = 3) -> None:
+        """Echo retrieval: POST {q, limit} or GET /api/echoes?q=..."""
+        memory = getattr(self, "memory", None)
+        echoes = memory.echoes(query, limit=limit) if memory and query else []
+        self._send_json({"echoes": echoes})
+
+    def _handle_echoes_post(self, body: dict) -> None:
+        query = str(body.get("q") or "")[:500]
+        try:
+            limit = int(body.get("limit") or 3)
+        except (TypeError, ValueError):
+            limit = 3
+        self._handle_echoes(query, limit=max(1, min(limit, 5)))
+
     def _handle_self_intents(self) -> None:
         """GET /api/self-intents — Kairos's own recurring themes."""
         try:
@@ -317,6 +342,7 @@ class UndermindProxy(BaseHTTPRequestHandler):
                 "intents": len(self.store.list_intents(min_count=1)),
                 "outputs": self.store.count_outputs(),
                 "self_intents": len(self.store.list_assistant_intents(min_count=1)),
+                "reflections": self.memory.count() if self.memory else 0,
                 "daydream": scheduler.status() if scheduler else None,
                 "serving": self._serving_summary(),
             }
@@ -413,14 +439,12 @@ class UndermindProxy(BaseHTTPRequestHandler):
         texts = [str(m.get("content", "")) for m in messages or []]
         return "\n".join(texts)
 
-    def _handle_generate(self) -> None:
-        body = self._read_body()
+    def _handle_generate(self, body: dict) -> None:
         prompt = str(body.get("prompt", ""))
         model = str(body.get("model", self.config.primary.model))
         self._serve_completion(prompt, model, chat_format=False)
 
-    def _handle_chat(self) -> None:
-        body = self._read_body()
+    def _handle_chat(self, body: dict) -> None:
         prompt = self._last_user_content(body.get("messages", []))
         model = str(body.get("model", self.config.primary.model))
         self._serve_completion(prompt, model, chat_format=True)
@@ -531,12 +555,7 @@ class UndermindProxy(BaseHTTPRequestHandler):
             }
         )
 
-    def _handle_v1_chat(self) -> None:
-        try:
-            body = self._read_body()
-        except Exception as exc:
-            self._send_openai_error(str(exc), status=400)
-            return
+    def _handle_v1_chat(self, body: dict) -> None:
         messages = body.get("messages") or []
         prompt = self._last_user_content(messages)
         model = str(body.get("model") or self.config.primary.model)
@@ -827,6 +846,18 @@ class ProxyServer:
 
         self.store = UndermindStore(self.config.store.db_path)
         self.cache = PredictionCache(ttl=self.config.proxy.cache_ttl_s)
+        # Memory Mine (semantic recall over the self-mirror). Optional:
+        # None on any failure so the stack runs without it.
+        try:
+            from pathlib import Path as _Path
+
+            from undermind.memory import MemoryStore
+
+            self.memory = MemoryStore(
+                _Path(self.config.store.db_path).parent / "memory_lance"
+            )
+        except Exception:
+            self.memory = None
         self.draft_client = build_draft_client(self.config)
         from undermind.providers.fallback import build_primary_chain
 
@@ -855,6 +886,7 @@ class ProxyServer:
             min_intent_count=self.config.daydream.min_intent_count,
             max_samples_per_intent=self.config.daydream.max_samples_per_intent,
             merge_similarity=self.config.daydream.merge_similarity,
+            memory_store=self.memory,
         )
         self.daydream_scheduler = DaydreamScheduler(
             worker=self.daydream,
@@ -916,6 +948,7 @@ class ProxyServer:
         _predictor = self.predictor
         _scheduler = self.daydream_scheduler
         _recent_serving = self.recent_serving
+        _memory = self.memory
 
         class ProxyHandler(UndermindProxy):
             cache = _cache
@@ -927,6 +960,7 @@ class ProxyServer:
             predictor = _predictor
             daydream_scheduler = _scheduler
             recent_serving = _recent_serving
+            memory = _memory
 
         return ProxyHandler
 

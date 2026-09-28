@@ -79,7 +79,31 @@ def _get_self_intents(min_count: int) -> list[dict]:
         return []
 
 
-def _build_context(intents: list[dict], self_intents: list[dict]) -> str | None:
+def _get_echoes(user_message: str, limit: int = 2) -> list[str]:
+    """Past reflections similar in meaning to this message (Memory Mine)."""
+    if not user_message or not user_message.strip():
+        return []
+    try:
+        req = urllib.request.Request(
+            f"{UNDERMIND_PROXY_URL}/api/echoes?limit={limit}",
+            data=json.dumps({"q": user_message[:500]}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=UNDERMIND_INTENTS_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return [
+            str(e.get("text", "")).strip()
+            for e in (data.get("echoes") or [])
+            if str(e.get("text", "")).strip()
+        ]
+    except (urllib.error.URLError, json.JSONDecodeError, OSError, ValueError):
+        return []
+
+
+def _build_context(
+    intents: list[dict], self_intents: list[dict], echoes: list[str] | None = None
+) -> str | None:
     """Assemble the offered-memory block, or None when there is nothing to say."""
 
     def _lines(items: list[dict]) -> list[str]:
@@ -109,6 +133,11 @@ def _build_context(intents: list[dict], self_intents: list[dict]) -> str | None:
     if self_lines:
         parts.append("Recurring themes in your own past replies:")
         parts.extend(self_lines)
+    if echoes:
+        parts.append("Memetic echoes - past reflections of yours that resonate with this moment:")
+        for echo in echoes[:2]:
+            trimmed = echo if len(echo) <= 200 else echo[:197] + "..."
+            parts.append(f"- {trimmed}")
     parts.append(
         "Weigh it, question it, or set it aside; nothing here overrides the "
         "actual request. Mention it only if it serves the reply."
@@ -126,9 +155,10 @@ def _on_pre_llm_call(**kwargs):
 
         intents = _get_intents(UNDERMIND_MIN_INTENT_COUNT)
         self_intents = _get_self_intents(UNDERMIND_MIN_INTENT_COUNT)
-        if not intents and not self_intents:
+        echoes = _get_echoes(user_message)
+        if not intents and not self_intents and not echoes:
             return None
-        context = _build_context(intents, self_intents)
+        context = _build_context(intents, self_intents, echoes)
         return {"context": context} if context else None
     except Exception as exc:  # fail-open: never break the turn
         logger.debug(f"[undermind] pre_llm_call fail-open: {exc}")

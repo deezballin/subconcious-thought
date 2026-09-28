@@ -5,8 +5,10 @@ description = "Universal inline prediction + fast handoff + daydreaming pipeline
 authors = [{name = "Dewayne"}]
 requires-python = ">=3.11"
 dependencies = [
+    "lancedb>=0.39.0",
     "pynput>=1.7.6",
     "requests>=2.32.0",
+    "sentence-transformers>=6.1.0",
 ]
 
 [project.scripts]

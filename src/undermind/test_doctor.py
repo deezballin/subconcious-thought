@@ -70,7 +70,7 @@ class TestDaydreamScheduler(unittest.TestCase):
         self.scheduler.start()
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
-            if self.store.count_unprocessed() == 0:
+            if self.store.count_unprocessed() == 0 and self.scheduler.cycles_run >= 1:
                 break
             time.sleep(0.05)
         self.assertEqual(self.store.count_unprocessed(), 0)

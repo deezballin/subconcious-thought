@@ -18,6 +18,7 @@ from undermind.exporter import Exporter
 from undermind.intents import find_similar_intent, is_system_prompt
 from undermind.intents import intent_id as compute_intent_id
 from undermind.intents import signature as compute_signature
+from undermind.memory import MemoryStore
 from undermind.store import UndermindStore
 
 
@@ -59,6 +60,7 @@ class DaydreamWorker:
         buffer_supplier: Optional[Callable[[], Optional[str]]] = None,
         on_cycle: Optional[Callable[[DaydreamResult], None]] = None,
         merge_similarity: float = 0.0,
+        memory_store: Optional[MemoryStore] = None,
     ) -> None:
         self.store = store
         self.exporter = exporter
@@ -69,6 +71,8 @@ class DaydreamWorker:
         self.buffer_supplier = buffer_supplier
         self.on_cycle = on_cycle
         self.merge_similarity = merge_similarity
+        # Semantic memory (Memory Mine): optional, fail-open by contract.
+        self.memory_store = memory_store
 
         self._idle_event = threading.Event()
         self._wake = threading.Event()
@@ -263,6 +267,13 @@ class DaydreamWorker:
             self.store.add_assistant_sample(iid, row["id"])
             self.store.mark_outputs_mined([row["id"]])
             folded += 1
+            # Memory Mine: embed the reflection for semantic recall (off-turn,
+            # fail-open — the mirror must never depend on this).
+            try:
+                if self.memory_store is not None:
+                    self.memory_store.remember(text, kind="reply", ref_id=row["id"])
+            except Exception:
+                pass
         return folded
 
     def _flush_buffer(self) -> Optional[int]:
