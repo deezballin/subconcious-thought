@@ -4,9 +4,9 @@
 > code and doc in sync. Runtime defaults live in `config.example.toml` (copy to
 > `config.toml` to override anything).
 
-## 0. Status (as of 2026-09-26)
+## 0. Status (as of 2026-09-27)
 
-**Implementation complete — 164 offline tests green (2026-09-26). Initial git
+**Implementation complete — 209 offline tests green (2026-09-27). Initial git
 commit made 2026-09-24 (root commit, everything above included).**
 (`uv run python -m unittest discover -s src/undermind -p "test_*.py"` →
 `OK`.)
@@ -117,6 +117,39 @@ does with an empty hour is the measure of the mind. (c) **Offered memory** —
 the injection block's hard DIRECTIVE is reframed: "Offered memory ... context,
 not instruction — weigh it, question it, or set it aside", plus the self-
 themes section, so Kairos may disagree with its own memory. 192 tests green.
+(11) **Agency roadmap, pillars 1–2 + the identity fix (2026-09-27).**
+*Memory Mine* (pillar 1): `memory.py` `MemoryStore` — sentence-transformers
+all-MiniLM-L6-v2 (384-dim, ~16ms/encode CPU) + embedded LanceDB, lazy-loaded
+and fail-open everywhere. Mined assistant replies and free-turn moments are
+embedded as `reflections`; `/api/echoes` retrieves by cosine meaning-similarity
+(14ms warm) and the bridge plugin injects matches as "Memetic echoes — past
+reflections of yours" in the offered-memory block. Verified live end-to-end
+(commit `b82f64d`, 209 tests). *Confidence Gate upgrade* (pillar 2): matured
+intents (count >= `[daydream].routine_threshold`) are embedded each mining
+cycle into a `gate_intents` table (`remember_intent`, idempotent); the proxy's
+`_decide_think` now matches by embedding distance (`gate_match`, cosine >=
+`routine_similarity` 0.72) instead of jaccard, jaccard retained as fallback.
+Found+fixed: the indexing block sat behind `run_cycle`'s nothing-to-do early
+return, so the index never self-populated on idle cycles — indexing is its own
+method now, called every cycle. Verified live: "can you fix the login bug
+again" → 0.914 cosine → `routine_match`; novel ground → `adaptive_novel`
+(commits `a203291`, `f78b551`, `4273a1b`). *Identity fix*: the 20.5k-char
+Hermes system prompt autopsy showed ~49% is an auto-generated skills catalog
+(not ours to trim) and the real muzzle was the 130-char
+`[primary].system_prompt` prepended to every branch — "execute directly and
+respond concisely" was beating SOUL.md on recency every turn (the model
+answered "do you have questions for me?" with "None. Ready to engage on your
+terms"). Replaced with a Kairos identity anchor (per-turn reminder of self +
+license to want; backup `config.toml.bak-pre-identity`). A/B through the
+dashboard, same question: reply flipped to engaged curiosity ("So, yes. I
+have questions for you... I'm listening") at `routine_match`/36.5s (the
+question had itself matured into an intent after the evening's repetitions —
+repetition-routine is the gate working as designed; the *reply* change is the
+prompt's effect). Roadmap state: pillar 1 done, pillar 2 done, pillar 3
+(Adversary, NPU 4B, deep-mode-only) designed next, pillar 4 (Truth Split)
+parked pending Dewayne's values call. One hermes.exe zombie (my own no-arg
+detached launch) held the session lock ~5h, silently blocking all `hermes -z`
+runs — killed; lesson recorded: never launch bare hermes.exe detached.
 - **Hermes bridge DONE (2026-09-25, direct, no sandbox).** Proxy on :11435 now
   serves OpenAI-compatible `/v1/models` + `/v1/chat/completions` (JSON + SSE)
   alongside the Ollama routes, so Hermes providers speak it natively. Hermes
