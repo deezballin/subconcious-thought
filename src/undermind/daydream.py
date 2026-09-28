@@ -167,12 +167,29 @@ class DaydreamWorker:
     # one cycle
     # ------------------------------------------------------------------
 
+    def _index_gate_intents(self) -> None:
+        """Embed matured intents for the think gate (Memory Mine pillar 2).
+
+        Semantic routine-vs-novel matching needs embedded intents, not just
+        word signatures. Idempotent per intent, fail-open; runs even on
+        no-op cycles so the index self-heals.
+        """
+        if self.memory_store is None:
+            return
+        try:
+            for row in self.store.list_intents(min_count=int(self.routine_threshold)):
+                self.memory_store.remember_intent(row["signature"], row["intent_id"])
+        except Exception:
+            pass  # the gate falls back to jaccard without this index
+
     def run_cycle(self) -> Optional[DaydreamResult]:
         """Flush the buffer, fold inputs into intents, export new snapshots."""
         flushed = self._flush_buffer()
         unprocessed = self.store.fetch_unprocessed()
 
         if not unprocessed and self.store.count_outputs(mined=False) == 0:
+            # Nothing to mine, but keep the think-gate index fresh.
+            self._index_gate_intents()
             return None
 
         # Fold the assistant's own replies into its self-mirror —
@@ -221,18 +238,8 @@ class DaydreamWorker:
             self.store.mark_processed(processed_ids)
             # Merge flows re-link samples that were already moved; drop dupes.
             self.store.dedupe_intent_samples()
-        # Index matured intents for the think gate (Memory Mine pillar 2):
-        # semantic routine-vs-novel matching needs embedded intents, not just
-        # word signatures. Idempotent per intent, off-turn, fail-open.
-        try:
-            if self.memory_store is not None:
-                threshold = getattr(self, "routine_threshold", 3)
-                for row in self.store.list_intents(min_count=int(threshold)):
-                    self.memory_store.remember_intent(
-                        row["signature"], row["intent_id"]
-                    )
-        except Exception:
-            pass
+        # Keep the think-gate index in sync with matured intents.
+        self._index_gate_intents()
 
         records = self.exporter.export_pending(
             self.min_intent_count, self.max_samples_per_intent
