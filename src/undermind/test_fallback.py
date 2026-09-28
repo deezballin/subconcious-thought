@@ -368,6 +368,22 @@ class TestStallGuard(unittest.TestCase):
         )
         self.assertEqual(provider.execute("ok"), "hello world")
 
+    def test_think_flag_reaches_payload(self):
+        provider = OllamaNativeProvider(
+            base_url="http://127.0.0.1:1/",
+            model="m",
+            timeout_s=5.0,
+            think=False,
+        )
+        payload = provider._payload("p", stream=True)
+        self.assertIs(payload["think"], False)
+        self.assertIn("options", payload)  # stall-guard branch intact
+        plain = provider._payload("p", stream=False)
+        self.assertIs(plain["think"], False)
+
+        deep = OllamaNativeProvider(base_url="http://127.0.0.1:1/", model="m")
+        self.assertIs(deep._payload("p", stream=False)["think"], True)
+
     def test_stall_disabled_keeps_plain_request_path(self):
         provider = OpenAICompatProvider(
             base_url=f"http://127.0.0.1:{self.OPENAI_PORT}",

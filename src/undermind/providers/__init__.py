@@ -60,6 +60,7 @@ def build_primary_provider(config: Config) -> PrimaryProvider:
     primary: PrimaryConfig = config.primary
     kind = primary.kind.strip().lower()
     stall = float(getattr(primary, "stall_timeout_s", 0) or 0)
+    think = bool(getattr(primary, "think", True))
     if kind == "openai_compat":
         return OpenAICompatProvider(
             base_url=primary.base_url,
@@ -74,6 +75,7 @@ def build_primary_provider(config: Config) -> PrimaryProvider:
             model=primary.model,
             timeout_s=primary.timeout_s,
             stall_timeout_s=stall,
+            think=think,
         )
     if kind == "webhook":
         return WebhookProvider(

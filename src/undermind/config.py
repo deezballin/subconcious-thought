@@ -73,6 +73,11 @@ class PrimaryConfig:
     # bounds a hung engine without cutting off long thinking turns, whose
     # token stream pauses only briefly. 0 disables stall detection.
     stall_timeout_s: float = 90.0
+    # Ollama only: keep the model's hidden reasoning ("thinking") enabled.
+    # Deep but slow on CPU-bound models (drafts the answer many times over);
+    # set false to skip deliberation and reply directly - several times
+    # faster, slightly shallower. Ollama-native kind only.
+    think: bool = True
 
 
 @dataclass

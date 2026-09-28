@@ -48,6 +48,10 @@ fallback_timeout_s = 60.0
 # hung engine without cutting off long thinking turns (tokens keep flowing).
 # 0 disables stall detection. Fallback rungs default to 30s when unset.
 stall_timeout_s = 90.0
+# Ollama only: keep the model's hidden reasoning ("thinking") enabled.
+# Deep but slow; false replies directly - several times faster, slightly
+# shallower. Speed-vs-depth is a config flip, not a model change.
+think = true
 
 [daydream]
 # The daydream worker runs only after this much complete pipeline idle time.

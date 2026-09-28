@@ -27,6 +27,7 @@ class OllamaNativeProvider:
         model: str,
         timeout_s: float = 30.0,
         stall_timeout_s: float = 0.0,
+        think: bool = True,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -34,6 +35,9 @@ class OllamaNativeProvider:
         # Max silent gap between streamed tokens during execute(); bounds a
         # hung engine without cutting off long thinking turns. 0 = disabled.
         self.stall_timeout_s = stall_timeout_s
+        # Keep the model's hidden reasoning enabled for execute(); false
+        # replies directly (faster, slightly shallower).
+        self.think = think
 
     def stream_tokens(self, messages, max_tokens, temperature, on_token) -> str:
         """Stream tokens with logprobs from /api/generate.
@@ -116,6 +120,18 @@ class OllamaNativeProvider:
             raise ProviderError(f"Cannot reach {self.base_url}{TAGS_PATH}: {exc}") from exc
         return [m.get("name", "") for m in response.json().get("models", [])]
 
+    def _payload(self, prompt: str, stream: bool) -> dict:
+        """Generate payload for primary execution (think flag included)."""
+        payload = {
+            "model": self.model,
+            "prompt": prompt,
+            "stream": stream,
+            "think": self.think,
+        }
+        if stream and self.stall_timeout_s and self.stall_timeout_s > 0:
+            payload["options"] = {"logprobs": 1}
+        return payload
+
     def execute(self, branch: str, context: str | None = None) -> str:
         """Generate for primary-pipeline execution.
 
@@ -127,7 +143,7 @@ class OllamaNativeProvider:
         """
         prompt = f"{context}\n\n{branch}" if context else branch
         if not self.stall_timeout_s or self.stall_timeout_s <= 0:
-            payload = {"model": self.model, "prompt": prompt, "stream": False}
+            payload = self._payload(prompt, stream=False)
             try:
                 response = requests.post(
                     f"{self.base_url}{GENERATE_PATH}",
@@ -139,12 +155,7 @@ class OllamaNativeProvider:
                 raise ProviderError(f"Primary execution failed: {exc}") from exc
             return response.json().get("response", "")
 
-        payload = {
-            "model": self.model,
-            "prompt": prompt,
-            "stream": True,
-            "options": {"logprobs": 1},
-        }
+        payload = self._payload(prompt, stream=True)
         collected: list[str] = []
         try:
             with requests.post(
