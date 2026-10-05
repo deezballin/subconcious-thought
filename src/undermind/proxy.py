@@ -35,6 +35,7 @@ import threading
 import time
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
@@ -215,9 +216,19 @@ class UndermindProxy(BaseHTTPRequestHandler):
         elif path == "/api/self-intents":
             self._handle_self_intents()
         elif path == "/api/echoes":
-            self._handle_echoes()
+            # GET carries the query on the URL; the POST route passes it in
+            # the body. Without parsing here, a GET always mined an empty
+            # query and answered `[]` (echoes only ever worked via POST).
+            query = parse_qs(urlparse(self.path).query)
+            try:
+                limit = int(query.get("limit", ["3"])[0])
+            except (TypeError, ValueError):
+                limit = 3
+            self._handle_echoes(query.get("q", [""])[0][:500], limit=max(1, min(limit, 5)))
         elif path == "/api/health":
             self._handle_health()
+        elif path == "/api/doctor":
+            self._handle_doctor()
         elif path == "/api/adversary-notes":
             self._handle_adversary_notes()
         elif path == "/v1/models":
@@ -394,6 +405,42 @@ class UndermindProxy(BaseHTTPRequestHandler):
             "riding_fallback": primary_model not in counts
             or counts[primary_model] < len(history) / 2,
         }
+
+    def _handle_doctor(self) -> None:
+        """GET /api/doctor — read-only view of the last persisted census.
+
+        `undermind --doctor` writes data/doctor_status.json (verdict + per-
+        pipeline results) and appends transitions to data/doctor_alerts.log.
+        Wrappers read those instead of re-running the census: same verdict the
+        supervisor and watchdogs act on, no live probing, fail-open to
+        `{ok: false}` when the doctor has never run here.
+        """
+        try:
+            directory = Path(self.config.store.db_path).expanduser().resolve().parent
+        except Exception as exc:
+            self._error(exc, status=500)
+            return
+
+        status = None
+        try:
+            status = json.loads((directory / "doctor_status.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            status = None  # never run (or half-written) — report, don't fail
+
+        alerts: list[str] = []
+        try:
+            alerts = (directory / "doctor_alerts.log").read_text(encoding="utf-8").splitlines()[-20:]
+        except OSError:
+            alerts = []
+
+        self._send_json(
+            {
+                "ok": status is not None,
+                "status": status,
+                "alerts": alerts,
+                "data_dir": str(directory),
+            }
+        )
 
     # ------------------------------------------------------------------
     # info endpoints

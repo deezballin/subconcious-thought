@@ -611,5 +611,124 @@ class TestThinkRouting(unittest.TestCase):
         self.assertEqual(reason, "routine_match")  # jaccard fallback
 
 
+class TestDoctorRoute(unittest.TestCase):
+    """GET /api/doctor serves the persisted census, fail-open when absent."""
+
+    DOCTOR_PORT = 11448
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.server = _make_server(cls.DOCTOR_PORT, cls.tmp.name)
+        cls.thread = threading.Thread(
+            target=cls.server._server.serve_forever, daemon=True
+        )
+        cls.thread.start()
+        time.sleep(0.3)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server._server.shutdown()
+        cls.server._server.server_close()
+        cls.server.store.close()
+        cls.tmp.cleanup()
+
+    def _get(self, path: str) -> dict:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{self.DOCTOR_PORT}{path}", timeout=20
+        ) as response:
+            self.assertEqual(response.status, 200)
+            return json.loads(response.read().decode())
+
+    def test_never_run_reports_not_ok(self):
+        data = self._get("/api/doctor")
+        self.assertFalse(data["ok"])
+        self.assertIsNone(data["status"])
+        self.assertEqual(data["alerts"], [])
+
+    def test_persisted_census_and_alerts_served(self):
+        status_path = os.path.join(self.tmp.name, "doctor_status.json")
+        payload = {
+            "ts": "2026-10-02T00:00:00",
+            "version": "0.2.0",
+            "verdict": "up",
+            "dead": [],
+            "results": [{"name": "Ollama", "status": "up", "detail": ""}],
+        }
+        with open(status_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+        with open(os.path.join(self.tmp.name, "doctor_alerts.log"), "w", encoding="utf-8") as handle:
+            handle.write("2026-10-02T00:00:00 Ollama DEAD boom\n")
+
+        data = self._get("/api/doctor")
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["status"]["verdict"], "up")
+        self.assertEqual(len(data["status"]["results"]), 1)
+        self.assertEqual(len(data["alerts"]), 1)
+        self.assertIn("Ollama DEAD", data["alerts"][0])
+
+
+class TestEchoesGet(unittest.TestCase):
+    """GET /api/echoes must forward ``?q=`` — it used to drop it (always [])."""
+
+    PORT = 11449
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        from undermind.config import Config
+
+        config = Config()
+        config.store.db_path = os.path.join(cls.tmp.name, "echoes.db")
+        cls.server = ProxyServer(host=PROXY_HOST, port=cls.PORT, config=config)
+
+        class FakeMemory:
+            def __init__(self):
+                self.calls = []
+
+            def echoes(self, query, limit=3):
+                self.calls.append((query, limit))
+                return [{"text": "past reflection"}]
+
+            def count(self):
+                return 1
+
+        cls.memory = FakeMemory()
+        cls.server.memory = cls.memory
+        handler = cls.server._handler_factory()
+        cls.server._server = ThreadingHTTPServer((PROXY_HOST, cls.PORT), handler)
+        cls.thread = threading.Thread(
+            target=cls.server._server.serve_forever, daemon=True
+        )
+        cls.thread.start()
+        time.sleep(0.3)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server._server.shutdown()
+        cls.server._server.server_close()
+        cls.server.store.close()
+        cls.tmp.cleanup()
+
+    def test_get_forwards_query_and_limit(self):
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{self.PORT}/api/echoes?q=bird+migration&limit=2",
+            timeout=20,
+        ) as response:
+            data = json.loads(response.read().decode())
+        self.assertEqual(data["echoes"], [{"text": "past reflection"}])
+        self.assertEqual(self.memory.calls[-1], ("bird migration", 2))
+
+    def test_get_without_query_returns_empty(self):
+        before = list(self.memory.calls)
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{self.PORT}/api/echoes", timeout=20
+        ) as response:
+            data = json.loads(response.read().decode())
+        self.assertEqual(data["echoes"], [])
+        # No query, no retrieval: the memory layer is not touched at all.
+        self.assertEqual(self.memory.calls, before)
+
+
 if __name__ == "__main__":
     unittest.main()

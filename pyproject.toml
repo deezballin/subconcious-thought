@@ -3,6 +3,7 @@ name = "undermind"
 version = "0.2.0"
 description = "Universal inline prediction + fast handoff + daydreaming pipeline"
 authors = [{name = "Dewayne"}]
+license = {text = "MIT"}
 requires-python = ">=3.11"
 dependencies = [
     "lancedb>=0.39.0",
