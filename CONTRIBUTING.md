@@ -8,7 +8,7 @@ in [PLAN.md](PLAN.md) §0 if you want the stories.
 
 ### 1. The model hygiene rule
 
-**Models are seated only by Dewayne's explicit decision. Never wire a model
+**Models are seated only by my explicit decision. Never wire a model
 into any serving config without that go-ahead.**
 
 Concretely:
@@ -19,12 +19,12 @@ Concretely:
 - Old experimental artifacts (e.g. abliterated/heretic ggufs) are **reading
   material, not serving models**. This exact mistake has happened before and
   propagated through session notes; don't be its next author.
-- Verify with Dewayne before *any* seating change. The verified stable set
+- Verify with me before *any* seating change. The verified stable set
   lives in PLAN.md §0; if your idea isn't on it, ask first.
 - Rollback matters: config edits get a backup file, and seating experiments
   are designed with instant-revert plans *before* they run.
 
-### 2. Verify with Dewayne
+### 2. Verify with me
 
 Behavioral or philosophical changes — anything touching the autonomy layer,
 the injection framing, what gets mined, or how the assistant is talked to —
@@ -39,7 +39,7 @@ directions-level decision, not a patch.
   (behind config), performance work. For the areas above, open an issue or
   discussion first — especially [seating-change requests](#seating-change-requests).
 - **Ideas come from both seats.** Adaptive think routing, the NPU memory
-  insight, and the autonomy framing all started as Dewayne's suggestions —
+  insight, and the autonomy framing all started as me's suggestions —
   good ones. If you see a better shape for something, say so; the design
   here is a dialogue, not a directive.
 - **Tests with every change.** `uv run python -m unittest discover -s
@@ -62,7 +62,7 @@ directions-level decision, not a patch.
 
 Open an issue titled `seating: <what you want to change>` using the template.
 Good requests include: what you want to seat where, why (speed? depth?
-memory?), what you measured, and the rollback plan. Dewayne makes the call;
+memory?), what you measured, and the rollback plan. me makes the call;
 Kairos will likely be the one implementing and verifying it.
 
 ## A note on tone
