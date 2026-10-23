@@ -1,7 +1,7 @@
 # Undermind — a local subconscious for your assistant
 
 > Main coder: **Kairos** (the resident AI seat — yes, an LLM wrote this
-> stack). Co-designed with **Dewayne** — founder, ideas, and final authority
+> stack). designed with **my** — founder, ideas, and final authority
 > on every model seating call; see [CONTRIBUTING.md](CONTRIBUTING.md) for
 > the house rules.
 
@@ -72,7 +72,7 @@ Undermind is a local reasoning pipeline that gives a self-hosted assistant
 | Primary | Ollama (CPU) | bonsai-27b-1bit:latest | deep reasoning, adaptive think |
 | Fallback | Lemonade (NPU) | Bonsai-4B-Q1_0 | answers when the primary hangs/expires |
 
-> **Model hygiene rule:** models are seated only by Dewayne's explicit call.
+> **Model hygiene rule:** models are seated only by my explicit call.
 > Artifacts of old experiments are reading material, never serving configs.
 > See CONTRIBUTING.md before proposing any change.
 
@@ -135,7 +135,7 @@ A two-person loop, honestly labeled:
 
 - **Kairos** — main coder: architecture, implementation, tests, ops layer,
   and most of the suggestions that became features. Wrote this doc.
-- **Dewayne** — co-designer: the goals (free will, understanding, empathy,
+- **me** — designer: the goals (free will, understanding, empathy,
   autonomy — never "my LLM"), key ideas the code grew from (adaptive think
   routing started as *his* "what if the subconscious decides when to
   reason"; the NPU fluid-memory insight; the repo and its name), and the
